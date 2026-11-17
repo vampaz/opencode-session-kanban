@@ -1,7 +1,14 @@
 import type { Plugin } from '@opencode/plugin';
 
 import { commitBoard, readBoard, type BoardDocument } from './core/board';
-import { eventIDOf, eventSessionID, triggerFor, type RuleEventLike } from './core/events';
+import { sharedActivity } from './activity';
+import {
+  eventIDOf,
+  eventSessionID,
+  eventStatusType,
+  triggerFor,
+  type RuleEventLike,
+} from './core/events';
 import { electEngine } from './core/leader';
 import { applyRule, type RuleOutcome, type RuleSubject, type RuleTrigger } from './core/rules';
 import { rulesApplyTo } from './core/status';
@@ -25,7 +32,11 @@ const EVENT_TYPES = [
   'session.status',
   'session.idle',
   'permission.asked',
+  'permission.replied',
   'form.created',
+  'form.replied',
+  'form.cancelled',
+  'session.deleted',
 ] as const;
 
 type SessionInfo = Awaited<ReturnType<Plugin.Context['session']['get']>>;
@@ -76,6 +87,12 @@ async function runEvents(
 
       const sessionID = eventSessionID(event as unknown as RuleEventLike);
       if (!sessionID) continue;
+
+      sharedActivity().apply(
+        event.type,
+        sessionID,
+        eventStatusType(event as unknown as RuleEventLike),
+      );
 
       await handleTrigger(
         ctx,

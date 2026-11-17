@@ -2,25 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import { Plugin } from '@opencode/plugin';
 
-import {
-  clearPlacement,
-  commitBoard,
-  dropPlacement,
-  pinPlacement,
-  prunePlacements,
-  readBoard,
-  removeColumn,
-  removeRule,
-  reorderColumns,
-  reorderRules,
-  updateSettings,
-  upsertColumn,
-  upsertRule,
-} from './core/board';
-import { previewRules } from './core/rules';
-import { startEngine, subjectFor, type NotifyPayload } from './engine';
+import { startEngine, type NotifyPayload } from './engine';
+import { createOperations } from './operations';
 import { Kanban } from './rpc';
-import { parseColumn, parseDocument, parseIds, parseRule, parseSettings } from './validate';
+import { createKanbanTools } from './tools';
+import { parseColumn, parseIds, parseRule, parseSettings } from './validate';
 
 type MoveRequest = {
   readonly sessionKey: string;
@@ -50,140 +36,99 @@ export default Plugin.define({
     // One line per location, so a spike run shows every instance the server starts.
     console.log('[kanban] server part ready', { instanceId, pid, directory, setupAt });
 
+    let emitChanged: (revision: number) => Promise<void> = async () => undefined;
+    const ops = createOperations(ctx, (revision) => emitChanged(revision));
+
     const rpc = await ctx.rpc.register(Kanban, {
-      snapshot: async () => readBoard(ctx.storage),
+      snapshot: () => ops.snapshot(),
 
       move: async (input) => {
         const request = parseMove(input);
-        const current = await readBoard(ctx.storage);
-        if (!current.columns.some((column) => column.id === request.columnId)) {
-          throw new Error(`Unknown column: ${request.columnId}`);
-        }
-
-        const board = await commitBoard(
-          ctx.storage,
-          (document) => dropPlacement(document, { ...request, updatedAt: Date.now() }).board,
+        const { board } = await ops.moveByIndex(
+          request.sessionKey,
+          request.columnId,
+          request.index,
+          request.source,
         );
-
-        await rpc.events.emit('changed', { revision: board.revision });
         return { revision: board.revision };
       },
 
       setPinned: async (input) => {
         const request = parsePinned(input);
-        const board = await commitBoard(ctx.storage, (document) =>
-          pinPlacement(document, request.sessionKey, request.pinned, Date.now()),
-        );
-
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.setPinned(request.sessionKey, request.pinned);
         return { revision: board.revision };
       },
 
       clearManual: async (input) => {
         const { sessionKey } = parseSessionKey(input);
-        const board = await commitBoard(ctx.storage, (document) =>
-          clearPlacement(document, sessionKey),
-        );
-
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.clearManual(sessionKey);
         return { revision: board.revision };
       },
 
       /** The window knows which sessions are gone; the server can only remove the keys it is given. */
       prune: async (input) => {
-        const keys = new Set(parseKeys(input));
-        if (keys.size === 0) return { revision: (await readBoard(ctx.storage)).revision };
-
-        const board = await commitBoard(
-          ctx.storage,
-          (document) => prunePlacements(document, (key) => keys.has(key)).board,
-        );
-
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.prune(parseKeys(input));
         return { revision: board.revision };
       },
 
       'rules.upsert': async (input) => {
-        const rule = parseRule(field(input, 'rule'));
-        const board = await commitBoard(ctx.storage, (document) => upsertRule(document, rule));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.upsertRule(parseRule(field(input, 'rule')));
         return { revision: board.revision };
       },
 
       'rules.remove': async (input) => {
-        const id = textField(field(input, 'id'), 'rule id');
-        const board = await commitBoard(ctx.storage, (document) => removeRule(document, id));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.removeRule(textField(field(input, 'id'), 'rule id'));
         return { revision: board.revision };
       },
 
       'rules.reorder': async (input) => {
-        const ids = parseIds(field(input, 'ids'));
-        const board = await commitBoard(ctx.storage, (document) => reorderRules(document, ids));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.reorderRules(parseIds(field(input, 'ids')));
         return { revision: board.revision };
       },
 
-      'rules.preview': async () => {
-        const board = await readBoard(ctx.storage);
-        const response = await ctx.session.list({ archived: false, limit: 200 });
-        const subjects = await Promise.all(response.data.map((info) => subjectFor(ctx, info)));
-
-        return { moves: previewRules(board, subjects) };
-      },
+      'rules.preview': async () => ({ moves: await ops.preview() }),
 
       'settings.update': async (input) => {
-        const patch = parseSettings(field(input, 'patch'));
-        const board = await commitBoard(ctx.storage, (document) => updateSettings(document, patch));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.updateSettings(parseSettings(field(input, 'patch')));
         return { revision: board.revision };
       },
 
       'columns.upsert': async (input) => {
-        const column = parseColumn(field(input, 'column'));
-        const board = await commitBoard(ctx.storage, (document) => upsertColumn(document, column));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.upsertColumn(parseColumn(field(input, 'column')));
         return { revision: board.revision };
       },
 
       'columns.remove': async (input) => {
-        const id = textField(field(input, 'id'), 'column id');
-        const board = await commitBoard(ctx.storage, (document) => removeColumn(document, id));
-        await rpc.events.emit('changed', { revision: board.revision });
-        return { revision: board.revision };
-      },
-
-      'columns.default': async (input) => {
-        const id = textField(field(input, 'id'), 'column id');
-        const current = await readBoard(ctx.storage);
-        if (!current.columns.some((column) => column.id === id)) {
-          throw new Error(`Unknown column: ${id}`);
-        }
-
-        const board = await commitBoard(ctx.storage, (document) =>
-          document.defaultColumn === id ? document : { ...document, defaultColumn: id },
-        );
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.removeColumn(textField(field(input, 'id'), 'column id'));
         return { revision: board.revision };
       },
 
       'columns.reorder': async (input) => {
-        const ids = parseIds(field(input, 'ids'));
-        const board = await commitBoard(ctx.storage, (document) => reorderColumns(document, ids));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.reorderColumns(parseIds(field(input, 'ids')));
+        return { revision: board.revision };
+      },
+
+      'columns.default': async (input) => {
+        const { board } = await ops.setDefaultColumn(textField(field(input, 'id'), 'column id'));
         return { revision: board.revision };
       },
 
       /** Import: `parseBoard` rejects an unknown version instead of overwriting the document. */
       'board.replace': async (input) => {
-        const document = parseDocument(field(input, 'document'));
-        const board = await commitBoard(ctx.storage, (current) => ({
-          ...document,
-          revision: current.revision,
-        }));
-        await rpc.events.emit('changed', { revision: board.revision });
+        const { board } = await ops.replaceBoard(field(input, 'document'));
         return { revision: board.revision };
       },
+    });
+
+    emitChanged = (revision) => rpc.events.emit('changed', { revision });
+
+    await ctx.tool.transform((editor) => {
+      editor.namespace({
+        name: 'kanban',
+        description:
+          'Read and move the session board. A card is an OpenCode session; columns are user buckets.',
+      });
+      for (const tool of createKanbanTools(ctx, ops)) editor.add(tool);
     });
 
     const stopEngine = startEngine(ctx, {

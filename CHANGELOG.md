@@ -64,3 +64,14 @@
   subject from the listed row.
 - One engine and one idle tick run per process, elected through `globalThis` with takeover when the
   owner unloads or the plugin reloads; the event-id dedupe stays as the safety net.
+
+### Agent tools, M4
+
+- Eleven tools under the `kanban` namespace with codemode: `list`, `get`, `move`, `pin`,
+  `clear_manual`, `archive`, `fork`, `create_session`, `list_rules`, `set_rule`, `preview_rules`.
+- The tools share the RPC server operations, so they work with no window open; `sessionID` accepts
+  `me`, a move is a manual placement, and an unknown column lists the valid ids.
+- `kanban_list` derives running and waiting from the plugin's event stream, with the server's missing
+  status and form APIs documented in the tool description.
+- Permissions through `ctx.permission.assert`: `kanban.archive`, `kanban.fork`, `kanban.rules`, and
+  `kanban.prompt` for a starter prompt. `kanban_fork` reports the missing server fork call.
