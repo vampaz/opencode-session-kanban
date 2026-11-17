@@ -217,7 +217,6 @@ export function Board(props: {
         title: ctx.t('board.archivedColumn'),
         order: Number.MAX_SAFE_INTEGER,
         color: null,
-        collapsed: false,
       };
       views.push({
         column,

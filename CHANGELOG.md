@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- The unused column-collapse switch and its `settings.collapsed` string. Columns no longer carry
+  `collapsed`; a stored board that has the field still loads, and the next write drops it.
+
 ## 0.1.0 - 2026-11-17
 
 ### Added

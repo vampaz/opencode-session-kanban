@@ -13,11 +13,11 @@ const MAX_WRITE_ATTEMPTS = 5;
 
 /** The settled default set. Written to a fresh document and editable afterwards. */
 export const DEFAULT_COLUMNS: readonly Column[] = [
-  { id: 'backlog', title: 'Backlog', order: 0, color: null, collapsed: false },
-  { id: 'in-progress', title: 'In progress', order: 1, color: null, collapsed: false },
-  { id: 'waiting', title: 'Waiting', order: 2, color: null, collapsed: false },
-  { id: 'done', title: 'Done', order: 3, color: null, collapsed: false },
-  { id: 'failed', title: 'Failed', order: 4, color: null, collapsed: false },
+  { id: 'backlog', title: 'Backlog', order: 0, color: null },
+  { id: 'in-progress', title: 'In progress', order: 1, color: null },
+  { id: 'waiting', title: 'Waiting', order: 2, color: null },
+  { id: 'done', title: 'Done', order: 3, color: null },
+  { id: 'failed', title: 'Failed', order: 4, color: null },
 ];
 
 export type Column = {
@@ -25,7 +25,6 @@ export type Column = {
   readonly title: string;
   readonly order: number;
   readonly color: string | null;
-  readonly collapsed: boolean;
 };
 
 export type PlacementSource = 'manual' | 'rule' | 'auto';
@@ -472,7 +471,24 @@ export function parseBoard(value: unknown): BoardDocument {
   if (!Array.isArray(value.rules)) throw new Error('The stored board has invalid rules.');
   if (!isSettings(value.settings)) throw new Error('The stored board has invalid settings.');
 
-  return value as unknown as BoardDocument;
+  // Legacy columns carried an unused `collapsed` field: accept it, then drop it on read so the
+  // next write stores the current shape. Other unknown fields are dropped the same way.
+  const columns = (value.columns as readonly Column[]).map((column) => ({
+    id: column.id,
+    title: column.title,
+    order: column.order,
+    color: column.color,
+  }));
+
+  return {
+    version: value.version,
+    revision: value.revision,
+    columns,
+    defaultColumn: value.defaultColumn,
+    placements: value.placements,
+    rules: value.rules,
+    settings: value.settings,
+  } as unknown as BoardDocument;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -485,8 +501,7 @@ function isColumn(value: unknown): value is Column {
     typeof value.id === 'string' &&
     typeof value.title === 'string' &&
     typeof value.order === 'number' &&
-    (typeof value.color === 'string' || value.color === null) &&
-    typeof value.collapsed === 'boolean'
+    (typeof value.color === 'string' || value.color === null)
   );
 }
 

@@ -172,7 +172,7 @@ Stored under one key (`board`) as a single JSON document.
   "version": 1,
   "revision": 42,
   "columns": [
-    { "id": "backlog", "title": "Backlog", "order": 0, "color": null, "collapsed": false }
+    { "id": "backlog", "title": "Backlog", "order": 0, "color": null }
   ],
   "defaultColumn": "backlog",
   "placements": {
@@ -257,7 +257,7 @@ The fork keeps its own column until its root disappears; it never becomes a root
 
 ### Board
 
-- Columns: add, rename, recolor, reorder, collapse, delete. Deleting a column moves its cards to
+- Columns: add, rename, recolor, reorder, delete. Deleting a column moves its cards to
   `defaultColumn`.
 - Cards show title, project and subpath, status badge, last activity, agent and model, and cost for
   the current run. No task checklist in v1.

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { SettingsPage, type DialogHandle, type UiMenuEntry } from '@opencode/plugin/gui';
 
 import { defaultBoard, type BoardDocument, type BoardSettings, type Column } from '../core/board';
@@ -6,6 +6,7 @@ import type { PreviewMove, Rule } from '../core/rules';
 import { kanbanClient, type UiContext } from './client';
 import { openRuleEditor } from './rule-editor';
 import { serverOf } from './sessions';
+import { commitText } from './text-field';
 
 export function addSettingsPage(ctx: UiContext): void {
   ctx.add(SettingsPage, {
@@ -31,7 +32,7 @@ export function addSettingsPage(ctx: UiContext): void {
         {
           id: 'columns',
           title: ctx.t('settings.columns'),
-          keywords: 'rename color reorder collapse delete add',
+          keywords: 'rename color reorder delete add',
         },
         {
           id: 'rules',
@@ -50,7 +51,6 @@ function KanbanSettings(props: { ctx: UiContext }) {
   const [document, setDocument] = createSignal<BoardDocument>();
   const [error, setError] = createSignal<string>();
   const [moves, setMoves] = createSignal<PreviewMove[]>();
-  const [idle, setIdle] = createSignal('10');
   const [newColumn, setNewColumn] = createSignal('');
 
   const client = () => kanbanClient(ctx);
@@ -79,11 +79,6 @@ function KanbanSettings(props: { ctx: UiContext }) {
     void refresh();
     const stop = client().events.on('changed', () => void refresh());
     onCleanup(stop);
-  });
-
-  createEffect(() => {
-    const doc = document();
-    if (doc) setIdle(String(doc.settings.idleMinutes));
   });
 
   function setSetting<Key extends keyof BoardSettings>(key: Key, value: BoardSettings[Key]): void {
@@ -142,7 +137,6 @@ function KanbanSettings(props: { ctx: UiContext }) {
       title,
       order: doc.columns.length,
       color: null,
-      collapsed: false,
     };
 
     void run(() => client()['columns.upsert']({ column })).then(() => setNewColumn(''));
@@ -319,14 +313,13 @@ function KanbanSettings(props: { ctx: UiContext }) {
                 title={ctx.t('settings.idleMinutes')}
                 description={ctx.t('settings.idleMinutesHint')}
               >
-                <div class="sk-settings__control">
-                  <ctx.ui.TextInput
-                    label={ctx.t('settings.idleMinutes')}
-                    value={idle()}
-                    onInput={setIdle}
-                    onSubmit={() => setSetting('idleMinutes', Math.max(0, Number(idle()) || 0))}
-                  />
-                </div>
+                <SavedTextInput
+                  ctx={ctx}
+                  class="sk-settings__control"
+                  label={ctx.t('settings.idleMinutes')}
+                  value={String(doc().settings.idleMinutes)}
+                  onSave={(value) => setSetting('idleMinutes', Math.max(0, Number(value) || 0))}
+                />
               </ctx.ui.SettingsRow>
               <ctx.ui.SettingsRow
                 id="notify-moves"
@@ -343,19 +336,19 @@ function KanbanSettings(props: { ctx: UiContext }) {
             </ctx.ui.SettingsSection>
 
             <ctx.ui.SettingsSection title={ctx.t('settings.columns')}>
-              <For each={doc().columns}>
+              <Index each={doc().columns}>
                 {(column) => (
                   <ColumnRow
                     ctx={ctx}
-                    column={column}
-                    first={doc().columns[0]?.id === column.id}
-                    last={doc().columns[doc().columns.length - 1]?.id === column.id}
-                    onChange={(patch) => updateColumn(column, patch)}
-                    onMove={(delta) => moveColumn(column, delta)}
-                    onDelete={() => void deleteColumn(column)}
+                    column={column()}
+                    first={doc().columns[0]?.id === column().id}
+                    last={doc().columns[doc().columns.length - 1]?.id === column().id}
+                    onChange={(patch) => updateColumn(column(), patch)}
+                    onMove={(delta) => moveColumn(column(), delta)}
+                    onDelete={() => void deleteColumn(column())}
                   />
                 )}
-              </For>
+              </Index>
               <ctx.ui.SettingsRow title={ctx.t('settings.addColumn')}>
                 <div class="sk-settings__add">
                   <ctx.ui.TextInput
@@ -514,9 +507,6 @@ function ColumnRow(props: {
   onDelete(): void;
 }) {
   const ctx = props.ctx;
-  const [title, setTitle] = createSignal(props.column.title);
-
-  createEffect(() => setTitle(props.column.title));
 
   return (
     <div class="sk-settings__column">
@@ -527,21 +517,12 @@ function ColumnRow(props: {
         value={props.column.color ?? '#7ba797'}
         onChange={(event) => props.onChange({ color: event.currentTarget.value })}
       />
-      <div class="sk-settings__grow">
-        <ctx.ui.TextInput
-          label={ctx.t('settings.columnName')}
-          value={title()}
-          onInput={setTitle}
-          onSubmit={() => {
-            if (title().trim()) props.onChange({ title: title().trim() });
-          }}
-        />
-      </div>
-      <ctx.ui.Switch
-        label={ctx.t('settings.collapsed')}
-        hideLabel
-        checked={props.column.collapsed}
-        onChange={(checked) => props.onChange({ collapsed: checked })}
+      <SavedTextInput
+        ctx={ctx}
+        class="sk-settings__grow"
+        label={ctx.t('settings.columnName')}
+        value={props.column.title}
+        onSave={(title) => props.onChange({ title })}
       />
       <ctx.ui.IconButton
         icon="arrow-up"
@@ -559,6 +540,72 @@ function ColumnRow(props: {
         icon="trash"
         label={ctx.t('settings.deleteColumn')}
         onClick={props.onDelete}
+      />
+    </div>
+  );
+}
+
+/**
+ * A text field that saves its value on Enter and when focus leaves it. A snapshot refresh replaces
+ * the `value` prop on every change, so the field keeps its draft while the user edits it instead of
+ * overwriting what they typed.
+ */
+function SavedTextInput(props: {
+  ctx: UiContext;
+  class?: string;
+  label: string;
+  placeholder?: string;
+  value: string;
+  onSave(value: string): void;
+}) {
+  const [draft, setDraft] = createSignal(props.value);
+  const [editing, setEditing] = createSignal(false);
+  const ctx = props.ctx;
+  let saved = props.value;
+  let seen = props.value;
+
+  createEffect(() => {
+    const stored = props.value;
+    if (stored === seen) return;
+    seen = stored;
+    saved = stored;
+    if (!editing()) setDraft(stored);
+  });
+
+  function commit(): void {
+    const decision = commitText(draft(), saved);
+    if (decision.kind === 'save') {
+      saved = decision.value;
+      setDraft(decision.value);
+      props.onSave(decision.value);
+      return;
+    }
+    if (decision.kind === 'revert') setDraft(saved);
+  }
+
+  return (
+    <div
+      class={props.class}
+      onFocusIn={() => setEditing(true)}
+      onFocusOut={() => {
+        setEditing(false);
+        commit();
+      }}
+      on:keydown={(event: KeyboardEvent) => {
+        if (event.key !== 'Escape' || !editing()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDraft(saved);
+        setEditing(false);
+        if (event.target instanceof HTMLElement) event.target.blur();
+      }}
+    >
+      <ctx.ui.TextInput
+        label={props.label}
+        placeholder={props.placeholder}
+        value={draft()}
+        onInput={setDraft}
+        onSubmit={commit}
       />
     </div>
   );

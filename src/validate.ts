@@ -121,7 +121,6 @@ export function parseColumn(value: unknown): Column {
     title: text(item.title, 'column title'),
     order: finite(item.order, 'column order'),
     color: item.color === null ? null : text(item.color, 'column color'),
-    collapsed: bool(item.collapsed, 'column collapsed'),
   };
 }
 

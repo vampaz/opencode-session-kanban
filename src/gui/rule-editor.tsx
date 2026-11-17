@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { For, Index, Show, createSignal } from 'solid-js';
 import type { DialogHandle, UiMenuEntry } from '@opencode/plugin/gui';
 
 import type { BoardDocument } from '../core/board';
@@ -255,43 +255,41 @@ function RuleEditor(props: {
 
         <div class="sk-rule__group">
           <span class="sk-rule__title">{ctx.t('rule.conditions')}</span>
-          <For each={conditions()}>
+          <Index each={conditions()}>
             {(condition, index) => (
               <div class="sk-rule__condition">
                 <ctx.ui.Menu
                   trigger="button"
-                  label={ctx.t(`condition.${condition.type}`)}
-                  items={conditionItems(index())}
+                  label={ctx.t(`condition.${condition().type}`)}
+                  items={conditionItems(index)}
                 />
-                <Show when={condition.type !== 'root'}>
+                <Show when={condition().type !== 'root'}>
                   <ctx.ui.Menu
                     trigger="button"
-                    label={ctx.t(`operator.${operatorOf(condition)}`)}
-                    items={operatorItems(index(), condition.type)}
+                    label={ctx.t(`operator.${operatorOf(condition())}`)}
+                    items={operatorItems(index, condition().type)}
                   />
                   <ctx.ui.TextInput
                     label={ctx.t('rule.value')}
-                    value={String(condition.value)}
-                    onInput={(value) => updateCondition(index(), withValue(condition, value))}
+                    value={String(condition().value)}
+                    onInput={(value) => updateCondition(index, withValue(condition(), value))}
                   />
                 </Show>
-                <Show when={condition.type === 'root'}>
+                <Show when={condition().type === 'root'}>
                   <ctx.ui.Switch
                     label={ctx.t('rule.value')}
-                    checked={condition.value === true}
-                    onChange={(checked) =>
-                      updateCondition(index(), { type: 'root', value: checked })
-                    }
+                    checked={condition().value === true}
+                    onChange={(checked) => updateCondition(index, { type: 'root', value: checked })}
                   />
                 </Show>
                 <ctx.ui.IconButton
                   icon="trash"
                   label={ctx.t('rule.removeCondition')}
-                  onClick={() => removeCondition(index())}
+                  onClick={() => removeCondition(index)}
                 />
               </div>
             )}
-          </For>
+          </Index>
           <ctx.ui.Menu
             trigger="button"
             icon="plus"

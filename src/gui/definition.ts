@@ -76,7 +76,6 @@ export const definition = Plugin.define({
       'settings.columnName': 'Column name',
       'settings.columnNameHint': 'New column name',
       'settings.color': 'Column color',
-      'settings.collapsed': 'Collapsed',
       'settings.addColumn': 'Add column',
       'settings.add': 'Add',
       'settings.moveUp': 'Move up',

@@ -9,9 +9,8 @@ const columnSchema = {
     title: { type: 'string' },
     order: { type: 'number' },
     color: { type: ['string', 'null'] },
-    collapsed: { type: 'boolean' },
   },
-  required: ['id', 'title', 'order', 'color', 'collapsed'],
+  required: ['id', 'title', 'order', 'color'],
   additionalProperties: false,
 } as const;
 

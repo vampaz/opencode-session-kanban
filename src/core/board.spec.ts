@@ -194,6 +194,21 @@ describe('readBoard', () => {
     );
   });
 
+  it('drops the legacy collapsed column field on read and on the next write', async () => {
+    const legacy = defaultBoard();
+    const store = createStorage({
+      ...legacy,
+      columns: legacy.columns.map((column) => ({ ...column, collapsed: true })),
+    });
+
+    const board = await readBoard(store.storage);
+    expect(board.columns).toHaveLength(legacy.columns.length);
+    for (const column of board.columns) expect(Object.hasOwn(column, 'collapsed')).toBe(false);
+
+    await commitBoard(store.storage, (current) => ({ ...current, defaultColumn: 'done' }));
+    expect(JSON.stringify(store.value)).not.toContain('collapsed');
+  });
+
   it('refuses a malformed placement', () => {
     expect(() =>
       parseBoard({ ...defaultBoard(), placements: { 'sidecar\nses_1': { columnId: 1 } } }),

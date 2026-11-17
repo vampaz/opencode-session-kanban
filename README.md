@@ -31,7 +31,7 @@ Status: **v1 (0.1.0)**. The GUI plugin API is experimental; the package pins Ope
   touch archived sessions, and dry-run with a button. Rule notifications show a toast, or a system
   notification when the window is unfocused.
 - **Settings page `Session kanban`**: board defaults, columns (add, rename, recolour, reorder,
-  collapse, delete), rule list with the inline editor and dry run, export, import, and reset.
+  delete), rule list with the inline editor and dry run, export, import, and reset.
 - **Agent tools**: `kanban_list`, `kanban_get`, `kanban_move`, `kanban_pin`, `kanban_clear_manual`,
   `kanban_archive`, `kanban_fork`, `kanban_create_session`, `kanban_list_rules`,
   `kanban_set_rule`, `kanban_preview_rules`.
@@ -148,7 +148,7 @@ directory for throwaway sessions.
 5. **Rules**: a `created` rule places a new session; a manually placed (or pinned) card is skipped
    unless the rule overrides it; dry run lists moves without applying them; a rule notification shows
    a toast, or a system notification when the window is unfocused.
-6. **Settings**: add, rename, recolour, reorder, collapse, and delete a column; edit a rule; export,
+6. **Settings**: add, rename, recolour, reorder, and delete a column; edit a rule; export,
    import the same JSON (round-trips), and reset.
 7. **States**: a failing snapshot shows the error state with Retry; a disconnected server keeps the
    last snapshot behind the stale banner and recovers without a reload.
