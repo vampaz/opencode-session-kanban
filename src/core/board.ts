@@ -6,10 +6,10 @@ import type { Rule } from './rules';
 export const BOARD_VERSION = 1;
 
 /** The single storage key. One board per server, across every project. */
-export const BOARD_KEY = 'board';
+const BOARD_KEY = 'board';
 
 /** A write retries when another instance replaced the document first. */
-export const MAX_WRITE_ATTEMPTS = 5;
+const MAX_WRITE_ATTEMPTS = 5;
 
 /** The settled default set. Written to a fresh document and editable afterwards. */
 export const DEFAULT_COLUMNS: readonly Column[] = [
@@ -47,7 +47,7 @@ export type BoardSettings = {
   readonly notifyOnRuleMove: boolean;
 };
 
-export const DEFAULT_SETTINGS: BoardSettings = {
+const DEFAULT_SETTINGS: BoardSettings = {
   showSubagents: false,
   archived: 'hide',
   idleMinutes: 10,
@@ -136,7 +136,7 @@ export function columnOrder(
 export const REBALANCE_STEP = 1024;
 
 /** Below this gap a midpoint is no longer distinguishable from its neighbours. */
-export const MIN_POSITION_GAP = 1e-6;
+const MIN_POSITION_GAP = 1e-6;
 
 /**
  * Rewrites a column's positions as `index * REBALANCE_STEP`. Only called when a midpoint would

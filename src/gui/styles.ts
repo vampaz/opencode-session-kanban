@@ -192,17 +192,18 @@ export const boardStyles = `
 
 .sk-card__meta {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: baseline;
   min-width: 0;
   color: var(--text-weak, inherit);
   font-size: 0.72rem;
 }
 
+/* Wrap first and truncate never: a short agent name must not become "b…". */
 .sk-card__meta > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .sk-status {

@@ -2,11 +2,11 @@ import { Command } from '@opencode/plugin/gui';
 
 import type { UiContext } from './client';
 import { openQuickBoard } from './dialog';
-import { boardKey } from './key';
+import { boardKey, routedSession } from './key';
 
-/** Shows the board on the routed session, or the quick board from Home. Never hides it. */
+/** Shows the board on the routed session, or the quick board from Home and drafts. Never hides it. */
 export function openBoard(ctx: UiContext): void {
-  const session = ctx.sessions.current();
+  const session = routedSession(ctx);
   if (!session) {
     openQuickBoard(ctx);
     return;
@@ -20,7 +20,7 @@ export function openBoard(ctx: UiContext): void {
 
 /** The command's behavior: hide the board when it is the one showing. */
 function toggleBoard(ctx: UiContext): void {
-  const session = ctx.sessions.current();
+  const session = routedSession(ctx);
   if (!session) {
     openQuickBoard(ctx);
     return;
