@@ -4,7 +4,7 @@ import type { PreviewMove, Rule } from '../core/rules';
 import { projectLabel } from '../core/status';
 import type { CardDetail } from '../operations';
 
-export function formatCardLine(row: CardRow): string {
+function formatCardLine(row: CardRow): string {
   const flags = [row.columnTitle, row.status];
   if (row.pinned) flags.push('pinned');
   else flags.push(row.source);

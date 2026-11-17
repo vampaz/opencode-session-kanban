@@ -4,7 +4,7 @@ export type Parsed<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly message: string };
 
-export const CARD_STATUSES: readonly CardStatus[] = [
+const CARD_STATUSES: readonly CardStatus[] = [
   'idle',
   'running',
   'waiting',

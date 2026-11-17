@@ -1,6 +1,6 @@
 {
   "name": "@vampaz/opencode-session-kanban",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "OpenCode session kanban: a shared board where every card is a live session",
   "keywords": [
     "board",

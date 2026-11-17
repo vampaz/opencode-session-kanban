@@ -1,4 +1,4 @@
-import { parseBoard, type BoardDocument, type BoardSettings, type Column } from './core/board';
+import type { BoardSettings, Column } from './core/board';
 import {
   RULE_TRIGGERS,
   type Rule,
@@ -151,8 +151,4 @@ export function parseSettings(value: unknown): Partial<BoardSettings> {
   }
 
   return patch as Partial<BoardSettings>;
-}
-
-export function parseDocument(value: unknown): BoardDocument {
-  return parseBoard(value);
 }

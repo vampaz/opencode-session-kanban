@@ -24,7 +24,7 @@ const CONDITION_OPERATORS: Record<RuleCondition['type'], readonly string[]> = {
   idleMinutes: ['gt'],
 };
 
-export function newRule(board: BoardDocument): Rule {
+function newRule(board: BoardDocument): Rule {
   return {
     id: `rule_${Math.random().toString(36).slice(2, 10)}`,
     name: '',

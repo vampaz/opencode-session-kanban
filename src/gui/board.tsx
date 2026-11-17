@@ -7,7 +7,7 @@ import { filterCards, isFiltering } from '../core/filter';
 import { groupForks, projectLabel, selectCards, type CardStatus } from '../core/status';
 import { SessionCard, type CardActions, type CardView } from './card';
 import { kanbanClient, type UiContext } from './client';
-import { boardKey } from './key';
+import { boardKey, routedSession } from './key';
 import { openNewSession } from './new-session';
 import { activityOf, factsOf, isGone, rowsOf, serverOf } from './sessions';
 import { useViewFilters } from './view';
@@ -53,7 +53,7 @@ export function Board(props: {
   const server = () => serverOf(ctx);
   const connected = () => server()?.connected ?? false;
   const filters = () => view.filters();
-  const routed = () => props.session?.() ?? ctx.sessions.current();
+  const routed = () => props.session?.() ?? routedSession(ctx);
 
   const phase = (): Phase => {
     if (!board()) return error() ? 'error' : 'loading';
@@ -396,7 +396,7 @@ export function Board(props: {
   function addToColumn(column: Column): void {
     openNewSession(ctx, {
       columnId: column.id,
-      directory: props.directory?.() ?? ctx.sessions.current()?.directory,
+      directory: props.directory?.() ?? routedSession(ctx)?.directory,
       index: () => indexFor(column.id),
     });
   }
