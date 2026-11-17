@@ -1,44 +1,74 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import type { UiMenuEntry } from '@opencode/plugin/gui';
 
-import { type BoardDocument, type Column, positionBetween } from '../core/board';
+import { type BoardDocument, type Column, type Placement } from '../core/board';
+import { filterCards, isFiltering } from '../core/filter';
+import { groupForks, projectLabel, selectCards, type CardStatus } from '../core/status';
+import { SessionCard, type CardView } from './card';
 import { kanbanClient, type UiContext } from './client';
+import { activityOf, factsOf, rowsOf, serverOf } from './sessions';
+import { useViewFilters } from './view';
 
-/** M0 spike only: the identity of the instance that answered the call. */
-type Whoami = {
-  readonly instanceId: string;
-  readonly pid: number;
-  readonly directory: string | null;
-  readonly setupAt: string;
-};
+type Phase = 'loading' | 'ready' | 'stale' | 'error';
 
-type Card = {
-  readonly key: string;
-  readonly title: string;
-};
+type ColumnView = { readonly column: Column; readonly cards: readonly CardView[] };
+
+const STATUSES: readonly ('all' | CardStatus)[] = [
+  'all',
+  'idle',
+  'running',
+  'waiting',
+  'failed',
+  'interrupted',
+];
 
 /**
- * The board view. Reads the board through RPC and the sessions from the window's synced data.
- * Dragging a card between columns writes a placement; `changed` brings every other window along.
+ * The read-only board. Reads the document through RPC and the sessions from the window's synced
+ * data; a `changed` event or a reconnection refreshes it. It never writes.
  */
-export function Board(props: { ctx: UiContext; directory?: () => string | undefined }) {
+export function Board(props: { ctx: UiContext }) {
   const ctx = props.ctx;
+  const view = useViewFilters(ctx);
   const [board, setBoard] = createSignal<BoardDocument>();
-  const [whoami, setWhoami] = createSignal<Whoami>();
   const [error, setError] = createSignal<string>();
-  const [dragging, setDragging] = createSignal<string>();
 
-  const client = () => kanbanClient(ctx);
-  const server = () => ctx.servers.get('sidecar');
+  const server = () => serverOf(ctx);
   const connected = () => server()?.connected ?? false;
+  const filters = () => view.filters();
+
+  const phase = (): Phase => {
+    if (!board()) return error() ? 'error' : 'loading';
+    return connected() ? 'ready' : 'stale';
+  };
 
   async function refresh(): Promise<void> {
     try {
-      const [snapshot, identity] = await Promise.all([client().snapshot({}), client().whoami({})]);
-      setBoard(snapshot as BoardDocument);
-      setWhoami(identity as Whoami);
+      setBoard((await kanbanClient(ctx).snapshot({})) as BoardDocument);
       setError(undefined);
     } catch (cause) {
+      console.error('[kanban] snapshot failed', cause);
       setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  /** Loads the sessions of every project once, then the window's synced data keeps them current. */
+  let listing = false;
+  async function bootstrap(): Promise<void> {
+    const current = server();
+    if (!current || listing) return;
+
+    listing = true;
+    try {
+      const response = await current.client.session.list({
+        parentID: null,
+        archived: false,
+        limit: 200,
+      });
+      for (const info of response.data) current.data.session.remember(info);
+    } catch (cause) {
+      console.error('[kanban] could not list sessions', cause);
+    } finally {
+      listing = false;
     }
   }
 
@@ -52,225 +82,212 @@ export function Board(props: { ctx: UiContext; directory?: () => string | undefi
   }
 
   onMount(() => {
+    void bootstrap();
     void refresh();
-    const stop = client().events.on('changed', () => scheduleRefresh());
+    const stop = kanbanClient(ctx).events.on('changed', () => scheduleRefresh());
     onCleanup(() => {
       stop();
       if (timer !== undefined) clearTimeout(timer);
     });
   });
 
-  // A window that reconnects does not get missed events, so it re-requests the snapshot.
   let wasConnected: boolean | undefined;
   createEffect(() => {
     const now = connected();
-    if (wasConnected === false && now) scheduleRefresh();
+    if (wasConnected === false && now) {
+      void bootstrap();
+      scheduleRefresh();
+    }
     wasConnected = now;
   });
 
-  function cards(): Card[] {
+  const cards = createMemo<CardView[]>(() => {
     const current = server();
     if (!current) return [];
-    return current.data.session
-      .list()
-      .filter((info) => !info.parentID)
-      .map((info) => ({ key: `${current.id}\n${info.id}`, title: info.title?.trim() || info.id }));
-  }
 
-  function placementOf(key: string) {
-    return board()?.placements[key];
-  }
+    const rows = rowsOf(current);
+    const states = selectCards(factsOf(rows), {
+      ...activityOf(current),
+      showSubagents: board()?.settings.showSubagents ?? false,
+    });
+    const byID = new Map(rows.map((row) => [row.id, row]));
 
-  /** The column's cards in order: placements by fractional position, then the unplaced ones. */
-  function columnCards(columnId: string): Card[] {
-    const placed: { card: Card; position: number }[] = [];
-    const unplaced: Card[] = [];
-    const defaultColumn = board()?.defaultColumn;
+    return states.map((state) => {
+      const row = byID.get(state.id);
+      return {
+        ...state,
+        key: `${current.id}\n${state.id}`,
+        title: row?.title?.trim() || ctx.t('card.untitled'),
+        directory: row?.location.directory ?? '',
+        subpath: row?.subpath,
+        agent: row?.agent,
+        model: row?.model?.id,
+        cost: row?.cost ?? 0,
+      };
+    });
+  });
 
-    for (const card of cards()) {
-      const placement = placementOf(card.key);
-      if (placement && placement.columnId === columnId) {
-        placed.push({ card, position: placement.position });
-      } else if (columnId === defaultColumn && !columnExists(placement?.columnId)) {
-        unplaced.push(card);
-      }
+  const filtered = createMemo(() => filterCards(cards(), filters()));
+
+  const columns = createMemo<ColumnView[]>(() => {
+    const document = board();
+    if (!document) return [];
+
+    const fallback =
+      document.columns.find((column) => column.id === document.defaultColumn) ??
+      document.columns[0];
+    const byColumn = new Map<string, CardView[]>(document.columns.map((column) => [column.id, []]));
+
+    for (const card of filtered()) {
+      const placement = document.placements[card.key];
+      const columnID =
+        placement && byColumn.has(placement.columnId) ? placement.columnId : fallback?.id;
+      if (columnID) byColumn.get(columnID)?.push(card);
     }
 
-    placed.sort((left, right) => left.position - right.position);
-    return [...placed.map((row) => row.card), ...unplaced];
+    return document.columns.map((column) => {
+      const placed = (byColumn.get(column.id) ?? [])
+        .slice()
+        .sort(comparePlacements(document.placements, column.id));
+      return { column, cards: groupForks(placed) };
+    });
+  });
+
+  function projects(): string[] {
+    return [
+      ...new Set(
+        cards()
+          .map((card) => card.directory)
+          .filter((value) => value !== ''),
+      ),
+    ].sort((left, right) => projectLabel(left).localeCompare(projectLabel(right)));
   }
 
-  function columnExists(columnId: string | undefined): boolean {
-    return columnId !== undefined && (board()?.columns ?? []).some((c) => c.id === columnId);
+  function statusLabel(status: 'all' | CardStatus): string {
+    return status === 'all' ? ctx.t('filters.anyStatus') : ctx.t(`status.${status}`);
   }
 
-  function positionOf(card: Card | undefined, columnId: string): number | undefined {
-    const placement = card ? placementOf(card.key) : undefined;
-    return placement?.columnId === columnId ? placement.position : undefined;
+  function projectItems(): UiMenuEntry[] {
+    return [
+      { label: ctx.t('filters.allProjects'), onSelect: () => view.set('project', '') },
+      ...projects().map((directory) => ({
+        label: projectLabel(directory),
+        onSelect: () => view.set('project', directory),
+      })),
+    ];
   }
 
-  /** Drops a card into a column, before `beforeKey` when given, else at the end. */
-  async function drop(sessionKey: string, columnId: string, beforeKey?: string): Promise<void> {
-    if (!sessionKey || beforeKey === sessionKey) return;
-
-    const siblings = columnCards(columnId).filter((card) => card.key !== sessionKey);
-    const before = beforeKey ? siblings.findIndex((card) => card.key === beforeKey) : -1;
-    const index = before === -1 ? siblings.length : before;
-    const position = positionBetween(
-      positionOf(siblings[index - 1], columnId),
-      positionOf(siblings[index], columnId),
-    );
-
-    try {
-      await client().move({ sessionKey, columnId, position });
-      await refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-    setDragging(undefined);
-  }
-
-  function dragged(event: DragEvent): string {
-    return event.dataTransfer?.getData('text/plain') || dragging() || '';
+  function statusItems(): UiMenuEntry[] {
+    return STATUSES.map((status) => ({
+      label: statusLabel(status),
+      onSelect: () => view.set('status', status),
+    }));
   }
 
   return (
-    <div style={{ display: 'flex', 'flex-direction': 'column', height: '100%', 'min-height': 0 }}>
-      <Show when={error()}>
-        {(message) => (
-          <p style={{ margin: '0', padding: '8px 12px', 'font-size': '0.8rem' }}>
-            {ctx.t('board.error', { message: message() })}
-          </p>
-        )}
-      </Show>
-
-      <div
-        style={{
-          display: 'flex',
-          flex: '1',
-          gap: '8px',
-          padding: '8px',
-          'align-items': 'flex-start',
-          'overflow-x': 'auto',
-          'overflow-y': 'auto',
-        }}
-      >
-        <For each={board()?.columns ?? []}>
-          {(column: Column) => (
-            <section
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                void drop(dragged(event), column.id);
-              }}
-              style={{
-                display: 'flex',
-                'flex-direction': 'column',
-                gap: '6px',
-                'min-width': '160px',
-                width: '200px',
-                padding: '8px',
-                border: '1px solid',
-                'border-radius': '8px',
-                'background-color': 'color-mix(in srgb, currentColor 4%, transparent)',
-              }}
-            >
-              <header
-                style={{
-                  display: 'flex',
-                  'justify-content': 'space-between',
-                  'font-size': '0.8rem',
-                  'font-weight': '600',
-                }}
-              >
-                <span>{column.title}</span>
-                <span style={{ opacity: '0.6' }}>{columnCards(column.id).length}</span>
-              </header>
-
-              <For
-                each={columnCards(column.id)}
-                fallback={
-                  <p style={{ margin: '0', 'font-size': '0.75rem', opacity: '0.55' }}>
-                    {ctx.t('board.dropHere')}
-                  </p>
-                }
-              >
-                {(card) => (
-                  <article
-                    draggable
-                    onDragStart={(event) => {
-                      setDragging(card.key);
-                      event.dataTransfer?.setData('text/plain', card.key);
-                      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-                    }}
-                    onDragEnd={() => setDragging(undefined)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void drop(dragged(event), column.id, card.key);
-                    }}
-                    style={{
-                      padding: '8px',
-                      border: '1px solid',
-                      'border-radius': '6px',
-                      'background-color': 'inherit',
-                      cursor: 'grab',
-                      opacity: dragging() === card.key ? '0.5' : '1',
-                      'font-size': '0.85rem',
-                      'overflow-wrap': 'anywhere',
-                    }}
-                  >
-                    {card.title}
-                  </article>
-                )}
-              </For>
-            </section>
-          )}
-        </For>
+    <div class="sk-board">
+      <div class="sk-filters">
+        <ctx.ui.TextInput
+          label={ctx.t('filters.text')}
+          placeholder={ctx.t('filters.textHint')}
+          value={filters().text}
+          onInput={(value) => view.set('text', value)}
+        />
+        <div class="sk-filters__row">
+          <ctx.ui.Menu
+            trigger="button"
+            icon="folder"
+            label={
+              filters().project ? projectLabel(filters().project) : ctx.t('filters.allProjects')
+            }
+            items={projectItems()}
+          />
+          <ctx.ui.Menu
+            trigger="button"
+            icon="status"
+            label={statusLabel(filters().status)}
+            items={statusItems()}
+          />
+          <ctx.ui.Switch
+            label={ctx.t('filters.attention')}
+            checked={filters().attentionOnly}
+            onChange={(checked) => view.set('attentionOnly', checked)}
+          />
+          <Show when={isFiltering(filters())}>
+            <ctx.ui.Button variant="ghost" size="small" icon="reset" onClick={view.reset}>
+              {ctx.t('filters.clear')}
+            </ctx.ui.Button>
+          </Show>
+        </div>
       </div>
 
-      <footer
-        style={{
-          'border-top': '1px solid',
-          padding: '8px 12px',
-          display: 'flex',
-          'flex-direction': 'column',
-          gap: '2px',
-          'font-size': '0.7rem',
-          opacity: '0.7',
-          'overflow-wrap': 'anywhere',
-        }}
-      >
-        <strong>{ctx.t('board.diagnostics')}</strong>
-        <Show when={whoami()}>
-          {(who) => (
-            <>
-              <span>
-                {ctx.t('board.instance', {
-                  instance: who().instanceId.slice(0, 8),
-                  pid: who().pid,
-                })}
-              </span>
-              <span>
-                {ctx.t('board.serving', {
-                  directory: who().directory ?? '—',
-                  time: who().setupAt,
-                })}
-              </span>
-            </>
-          )}
+      <Show when={phase() === 'stale' || (phase() === 'ready' && error() !== undefined)}>
+        <p class="sk-banner">{ctx.t(phase() === 'stale' ? 'board.stale' : 'board.error')}</p>
+      </Show>
+
+      <Show when={phase() === 'loading'}>
+        <div class="sk-center">
+          <ctx.ui.Loader />
+          <span>{ctx.t('board.loading')}</span>
+        </div>
+      </Show>
+
+      <Show when={phase() === 'error'}>
+        <div class="sk-center">
+          <span>{ctx.t('board.error')}</span>
+          <Show when={error()}>{(detail) => <p class="sk-detail">{detail()}</p>}</Show>
+          <ctx.ui.Button onClick={() => void refresh()}>{ctx.t('board.retry')}</ctx.ui.Button>
+        </div>
+      </Show>
+
+      <Show when={phase() === 'ready' || phase() === 'stale'}>
+        <Show
+          when={filtered().length > 0}
+          fallback={
+            <div class="sk-empty">
+              <span>{ctx.t(cards().length === 0 ? 'board.empty' : 'board.emptyFiltered')}</span>
+              <Show when={isFiltering(filters())}>
+                <ctx.ui.Button variant="ghost" size="small" icon="reset" onClick={view.reset}>
+                  {ctx.t('filters.clear')}
+                </ctx.ui.Button>
+              </Show>
+            </div>
+          }
+        >
+          <div class="sk-columns">
+            <For each={columns()}>
+              {(entry) => (
+                <section class="sk-column">
+                  <header class="sk-column__head">
+                    <span>{entry.column.title}</span>
+                    <span class="sk-column__count">{entry.cards.length}</span>
+                  </header>
+                  <Show
+                    when={entry.cards.length > 0}
+                    fallback={<p class="sk-column__empty">{ctx.t('board.columnEmpty')}</p>}
+                  >
+                    <For each={entry.cards}>{(card) => <SessionCard ctx={ctx} card={card} />}</For>
+                  </Show>
+                </section>
+              )}
+            </For>
+          </div>
         </Show>
-        <Show when={props.directory?.()}>
-          {(directory) => <span>{ctx.t('board.routed', { directory: directory() })}</span>}
-        </Show>
-        <span>
-          {ctx.t('board.state', {
-            revision: board()?.revision ?? 0,
-            connection: ctx.t(connected() ? 'board.connected' : 'board.disconnected'),
-          })}
-        </span>
-      </footer>
+      </Show>
     </div>
   );
+}
+
+function comparePlacements(placements: Readonly<Record<string, Placement>>, columnID: string) {
+  return (left: CardView, right: CardView): number => {
+    const leftPlacement = placements[left.key];
+    const rightPlacement = placements[right.key];
+    const leftPosition =
+      leftPlacement?.columnId === columnID ? leftPlacement.position : Number.POSITIVE_INFINITY;
+    const rightPosition =
+      rightPlacement?.columnId === columnID ? rightPlacement.position : Number.POSITIVE_INFINITY;
+
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return right.updated - left.updated;
+  };
 }

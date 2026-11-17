@@ -44,30 +44,25 @@ npm run dev:gui   # rebuild the GUI bundle on change
 is the server part, `src/rpc.ts` is the contract between the two, and `src/gui.tsx` with
 `src/gui/` is the desktop part. See [PLAN.md](PLAN.md) for the design and the milestones.
 
-## M0 verification
+## Verification
 
-The spike exists to observe four assumptions in the running app. Run it against this checkout, a
-global `plugins` entry as above, and at least two projects.
+Load the checkout as above, then check the surfaces:
 
-1. **Build and watch the bundle.** Start `npm run dev:gui` in one terminal. It rebuilds
-   `dist/gui-experimental.cjs` on every source change.
-2. **Load the plugin.** Open Desktop, then open the board with `Cmd+Shift+B` (or
-   `Open session board` in the command palette). A session is required for the side panel; from Home
-   the same command opens the quick-board dialog.
-3. **One board, two projects.** Open a session in project A and another in project B. Move a card in
-   one window, then close and reopen the board in the other: the card is in the same column and the
-   revision is the same. Both windows read the single `board` key. Where the event stream works, the
-   other window updates without reopening.
-4. **RPC across locations.** The footer shows `Served by <instance> · pid <pid>` and the serving
-   `Directory`, next to `Routed session directory`. With the two sessions in different projects the
-   two directories differ: the window called an instance set up for another location.
-5. **Panel and drag and drop.** The board opens in the side region at its own ~900 px width. Drag a
-   card onto another column, then close and reopen the board: the card stays there. The server log has
-   one `[kanban] server part ready` line per location, each with its own directory.
-6. **Watch mode.** Edit `src/gui/board.tsx` while `npm run dev:gui` runs. The panel reloads with the
-   change after the rebuild.
-
-`whoami` and the footer are spike-only. They go away in M1 with the rest of the diagnostics.
+1. **Board.** Open a session and press `Cmd+Shift+B`, or run `Open session board` from the command
+   palette or `/kanban`. The pinned **Session board** tab opens in the side region and lists the
+   sessions of every project.
+2. **Cards.** Each card shows its title, project and subpath, status, last activity, agent, model, and
+   run cost when the window has them. A fork carries a fork marker and sits under its root.
+3. **Filters.** Filter by text, project, and status, or switch on **Running or waiting only**. View
+   preferences belong to the window, not the server, and one button clears them.
+4. **Header chip.** The session header shows the `running · waiting` counts and opens the board. It
+   shrinks to an icon when the title needs the room.
+5. **Launcher and dialog.** The side region's **+** menu and New tab view list **Session board**. From
+   Home the command opens the quick board in a dialog.
+6. **States.** With no matches the board explains the filters; while the server is unreachable it
+   keeps the last snapshot behind an offline banner and recovers without a reload.
+7. **Narrow window.** At about 700 px the filters wrap and the columns scroll sideways without the
+   page overflowing. On narrow screens the board is the panel's `mobile` view.
 
 ## License
 

@@ -1,0 +1,186 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  cardKind,
+  cardStatus,
+  familyArchived,
+  groupForks,
+  isVisible,
+  projectLabel,
+  rootID,
+  selectCards,
+  type CardKind,
+  type SessionFacts,
+} from './status';
+
+function session(overrides: Partial<SessionFacts> & { id: string }): SessionFacts {
+  return {
+    archived: false,
+    outcome: undefined,
+    updated: 0,
+    parentID: undefined,
+    fork: undefined,
+    ...overrides,
+  };
+}
+
+/** `root` ├─ `fork` └─ `forkOfFork`, plus `sub` under `root`. */
+function family(): SessionFacts[] {
+  return [
+    session({ id: 'root' }),
+    session({ id: 'fork', parentID: 'root', fork: { sessionID: 'root' } }),
+    session({ id: 'forkOfFork', parentID: 'fork', fork: { sessionID: 'fork' } }),
+    session({ id: 'sub', parentID: 'root' }),
+  ];
+}
+
+function map(sessions: readonly SessionFacts[]): ReadonlyMap<string, SessionFacts> {
+  return new Map(sessions.map((item) => [item.id, item]));
+}
+
+describe('cardKind', () => {
+  it('classifies a root, a fork, and a subagent', () => {
+    expect(cardKind(session({ id: 'a' }))).toBe('root');
+    expect(cardKind(session({ id: 'b', parentID: 'a', fork: {} }))).toBe('fork');
+    expect(cardKind(session({ id: 'c', parentID: 'a' }))).toBe('subagent');
+  });
+
+  it('treats a fork of a fork as a fork', () => {
+    expect(cardKind(session({ id: 'c', parentID: 'b', fork: {} }))).toBe('fork');
+  });
+});
+
+describe('rootID', () => {
+  it('walks a chain of forks to the root', () => {
+    const sessions = map(family());
+
+    expect(rootID(sessions, 'root')).toBe('root');
+    expect(rootID(sessions, 'fork')).toBe('root');
+    expect(rootID(sessions, 'forkOfFork')).toBe('root');
+  });
+
+  it('returns undefined when a parent was deleted', () => {
+    const sessions = map([session({ id: 'fork', parentID: 'gone', fork: {} })]);
+
+    expect(rootID(sessions, 'fork')).toBeUndefined();
+    expect(isVisible(sessions, sessions.get('fork')!, { showSubagents: false })).toBe(false);
+  });
+
+  it('stops on a cycle', () => {
+    const sessions = map([
+      session({ id: 'a', parentID: 'b', fork: {} }),
+      session({ id: 'b', parentID: 'a', fork: {} }),
+    ]);
+
+    expect(rootID(sessions, 'a')).toBeUndefined();
+  });
+});
+
+describe('visibility', () => {
+  it('hides subagents unless they are enabled', () => {
+    const sessions = map(family());
+    const sub = sessions.get('sub')!;
+
+    expect(isVisible(sessions, sub, { showSubagents: false })).toBe(false);
+    expect(isVisible(sessions, sub, { showSubagents: true })).toBe(true);
+  });
+
+  it('hides an archived root and its whole family', () => {
+    const sessions = map(
+      family().map((item) => (item.id === 'root' ? { ...item, archived: true } : item)),
+    );
+
+    expect(isVisible(sessions, sessions.get('root')!, { showSubagents: false })).toBe(false);
+    expect(isVisible(sessions, sessions.get('fork')!, { showSubagents: false })).toBe(false);
+    expect(isVisible(sessions, sessions.get('forkOfFork')!, { showSubagents: false })).toBe(false);
+    expect(familyArchived(sessions, 'forkOfFork')).toBe(true);
+  });
+
+  it('keeps a fork visible under a live root, in its own column', () => {
+    const sessions = map(family());
+
+    expect(isVisible(sessions, sessions.get('fork')!, { showSubagents: false })).toBe(true);
+    expect(familyArchived(sessions, 'fork')).toBe(false);
+  });
+});
+
+describe('cardStatus', () => {
+  it('prefers waiting over running and running over a past failure', () => {
+    const failed = session({ id: 'a', outcome: 'failed' });
+
+    expect(cardStatus({ session: failed, running: true, waiting: true })).toBe('waiting');
+    expect(cardStatus({ session: failed, running: true, waiting: false })).toBe('running');
+    expect(cardStatus({ session: failed, running: false, waiting: false })).toBe('failed');
+  });
+
+  it('reports an interrupted or idle run', () => {
+    expect(
+      cardStatus({
+        session: session({ id: 'a', outcome: 'interrupted' }),
+        running: false,
+        waiting: false,
+      }),
+    ).toBe('interrupted');
+    expect(
+      cardStatus({
+        session: session({ id: 'a', outcome: 'succeeded' }),
+        running: false,
+        waiting: false,
+      }),
+    ).toBe('idle');
+  });
+});
+
+describe('selectCards', () => {
+  it('keeps roots and forks, and skips subagents by default', () => {
+    const cards = selectCards(family(), {
+      running: new Set(['fork']),
+      waiting: new Set(['root']),
+      showSubagents: false,
+    });
+
+    expect(cards.map((card) => card.id)).toEqual(['root', 'fork', 'forkOfFork']);
+    expect(cards.map((card) => card.status)).toEqual(['waiting', 'running', 'idle']);
+    expect(cards.map((card) => card.rootID)).toEqual(['root', 'root', 'root']);
+  });
+
+  it('reads waiting from the window data for forks', () => {
+    const cards = selectCards(family(), {
+      running: new Set(),
+      waiting: new Set(['forkOfFork']),
+      showSubagents: false,
+    });
+
+    expect(cards.find((card) => card.id === 'forkOfFork')?.status).toBe('waiting');
+  });
+});
+
+describe('groupForks', () => {
+  it('puts a fork right after its root', () => {
+    const cards: { id: string; kind: CardKind; rootID: string }[] = [
+      { id: 'a', kind: 'root', rootID: 'a' },
+      { id: 'b', kind: 'root', rootID: 'b' },
+      { id: 'a-fork', kind: 'fork', rootID: 'a' },
+      { id: 'a-fork-fork', kind: 'fork', rootID: 'a' },
+    ];
+
+    expect(groupForks(cards).map((card) => card.id)).toEqual(['a', 'a-fork', 'a-fork-fork', 'b']);
+  });
+
+  it('leaves a fork in place when its root is in another column', () => {
+    const cards: { id: string; kind: CardKind; rootID: string }[] = [
+      { id: 'fork', kind: 'fork', rootID: 'elsewhere' },
+      { id: 'a', kind: 'root', rootID: 'a' },
+    ];
+
+    expect(groupForks(cards).map((card) => card.id)).toEqual(['fork', 'a']);
+  });
+});
+
+describe('projectLabel', () => {
+  it('uses the last directory segment and keeps the subpath', () => {
+    expect(projectLabel('/work/session-kanban')).toBe('session-kanban');
+    expect(projectLabel('/work/session-kanban/')).toBe('session-kanban');
+    expect(projectLabel('/work/mono', 'packages/ui')).toBe('mono/packages/ui');
+  });
+});
