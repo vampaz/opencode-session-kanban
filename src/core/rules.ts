@@ -25,7 +25,7 @@ export type RuleAction =
   | { readonly type: 'pin'; readonly pinned: boolean }
   | { readonly type: 'notify' };
 
-export interface Rule {
+export type Rule = {
   readonly id: string;
   readonly name: string;
   readonly enabled: boolean;
@@ -36,4 +36,4 @@ export interface Rule {
   readonly actions: readonly RuleAction[];
   readonly overrideManual: boolean;
   readonly cooldownMs: number;
-}
+};
