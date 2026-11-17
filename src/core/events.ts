@@ -24,7 +24,7 @@ export function triggerFor(event: RuleEventLike): RuleTrigger | undefined {
     case 'session.idle':
       return 'status.idle';
     case 'session.status':
-      return statusType(event) === 'idle' ? 'status.idle' : undefined;
+      return eventStatusType(event) === 'idle' ? 'status.idle' : undefined;
     case 'permission.asked':
       return 'waiting.permission';
     case 'form.created':
@@ -34,7 +34,8 @@ export function triggerFor(event: RuleEventLike): RuleTrigger | undefined {
   }
 }
 
-function statusType(event: RuleEventLike): string | undefined {
+/** The `status.type` of a `session.status` event: `idle`, `busy`, or `retry`. */
+export function eventStatusType(event: RuleEventLike): string | undefined {
   if (typeof event.data !== 'object' || event.data === null) return undefined;
   const status = (event.data as { readonly status?: unknown }).status;
   if (typeof status !== 'object' || status === null) return undefined;

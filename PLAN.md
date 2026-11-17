@@ -351,10 +351,18 @@ Registered by the server part, namespace `kanban`, `codemode: true`. Effective n
 | `kanban_fork` | `{ sessionID, column? }` | `kanban.fork` |
 | `kanban_create_session` | `{ directory, title?, prompt?, column }` | `kanban.prompt` when `prompt` is set |
 | `kanban_list_rules` | — | none |
-| `kanban_set_rule` | rule patch | `kanban.rules` |
+| `kanban_set_rule` | rule patch, or `{ id, remove: true }` | `kanban.rules` |
 | `kanban_preview_rules` | — | none |
 
 - `sessionID` accepts `"me"`, resolved from the tool call's own `context.sessionID`.
+- Tools call the same server operations as the RPC handlers, so every tool works with no window open.
+- `kanban_list` derives `running` and `waiting` from the plugin's own event stream: the server has no
+  session-status query, so a session that changed state before the server started reads `idle` until
+  its next event, and a session waiting on a form is not visible server-side.
+- `kanban_fork` reports that the server session API of this build has no fork call; the board's
+  **Fork…** action is the v1 path.
+- `kanban_archive` verifies `time.archived` after the update. A server build that ignores the flag
+  returns a failure message instead of a false success.
 - `kanban_move` sets `source: "manual"`. Unknown column or session returns a clear tool message rather
   than throwing.
 - Tools work with the panel closed; no window has to be open.
