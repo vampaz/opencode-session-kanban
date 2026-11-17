@@ -1,0 +1,70 @@
+{
+  "name": "@vampaz/opencode-session-kanban",
+  "version": "0.0.0",
+  "description": "OpenCode session kanban: a shared board where every card is a live session",
+  "keywords": [
+    "board",
+    "desktop",
+    "kanban",
+    "opencode",
+    "opencode-plugin",
+    "sessions"
+  ],
+  "homepage": "https://github.com/vampaz/opencode-session-kanban#readme",
+  "bugs": {
+    "url": "https://github.com/vampaz/opencode-session-kanban/issues"
+  },
+  "license": "MIT",
+  "author": "Carlos Rodrigues <vampaz@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vampaz/opencode-session-kanban.git"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "dist",
+    "!src/**/*.spec.ts"
+  ],
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./rpc": "./src/rpc.ts",
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "format": "oxfmt --check .",
+    "format:fix": "oxfmt .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:gui": "vite build",
+    "dev:gui": "vite build --watch",
+    "prepare": "npm run build:gui",
+    "prepublishOnly": "npm run lint && npm run format && npm run typecheck && npm test",
+    "check": "npm run lint && npm run format && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.3.0",
+    "@types/node": "^22.20.5",
+    "effect": "4.1.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "solid-js": "^1.9.19",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vite-plugin-solid": "^2.11.16",
+    "vitest": "^5.1.0"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.3.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
