@@ -25,3 +25,17 @@
 - The `running · waiting` header chip, the side-region launcher item, and the `/kanban` slash command.
 - Empty, offline, and error states, with a retry on error.
 - The M0 `whoami` method and the diagnostics footer are gone.
+
+### Placements, M2
+
+- Board writes are serialized by an in-process lock shared through `globalThis`; the revision check
+  stays as a second line of defence, so concurrent commits no longer lose an update.
+- Forks load at startup: a capped pass lists non-archived sessions and remembers forks with their
+  missing ancestors, so a fork renders with its marker and family visibility before it is opened.
+- Native drag and drop, with an optimistic mirror that reverts when a write fails. Every card also
+  has a **Move to…** menu for the keyboard and touch.
+- Card actions: Open, Move to…, Fork…, Pin, Archive, and Copy session ID.
+- New session from any column, with the panel project as the default directory, an optional title,
+  and an optional starter prompt.
+- Placements of deleted sessions and archived families are pruned on read.
+- RPC: `move` now takes a column index, plus `setPinned`, `clearManual`, and `prune`.

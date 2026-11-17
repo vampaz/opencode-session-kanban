@@ -118,6 +118,231 @@ export function positionBetween(before: number | undefined, after: number | unde
   return (before + after) / 2;
 }
 
+/** A column's placements, in display order. */
+export type OrderedPlacement = { readonly key: string; readonly position: number };
+
+export function columnOrder(
+  board: BoardDocument,
+  columnId: string,
+  options: { readonly exclude?: string } = {},
+): OrderedPlacement[] {
+  return Object.entries(board.placements)
+    .filter(([key, placement]) => placement.columnId === columnId && key !== options.exclude)
+    .map(([key, placement]) => ({ key, position: placement.position }))
+    .sort((left, right) => left.position - right.position || left.key.localeCompare(right.key));
+}
+
+/** The spacing a rebalance writes. Fractions beyond it are lossless enough for any real column. */
+export const REBALANCE_STEP = 1024;
+
+/** Below this gap a midpoint is no longer distinguishable from its neighbours. */
+export const MIN_POSITION_GAP = 1e-6;
+
+/**
+ * Rewrites a column's positions as `index * REBALANCE_STEP`. Only called when a midpoint would
+ * collapse, so a normal drop writes one card.
+ */
+export function rebalanceColumn(board: BoardDocument, columnId: string): BoardDocument {
+  const order = columnOrder(board, columnId);
+  if (order.length === 0) return board;
+
+  const placements = { ...board.placements };
+  let changed = false;
+
+  order.forEach((card, index) => {
+    const placement = placements[card.key];
+    const position = index * REBALANCE_STEP;
+    if (placement && placement.position !== position) {
+      placements[card.key] = { ...placement, position };
+      changed = true;
+    }
+  });
+
+  return changed ? { ...board, placements } : board;
+}
+
+export type DropInput = {
+  readonly sessionKey: string;
+  readonly columnId: string;
+  /** The place among the column's other cards: 0 is first, the length is last. */
+  readonly index: number;
+  readonly source?: PlacementSource;
+  readonly updatedAt: number;
+};
+
+export type DropResult = { readonly board: BoardDocument; readonly rebalanced: boolean };
+
+/** Moves a card into a column at an index, rebalancing first when the neighbours are too close. */
+export function dropPlacement(board: BoardDocument, input: DropInput): DropResult {
+  const siblings = columnOrder(board, input.columnId, { exclude: input.sessionKey });
+  const index = Math.max(0, Math.min(Math.trunc(input.index), siblings.length));
+  const before = siblings[index - 1]?.position;
+  const after = siblings[index]?.position;
+
+  let working = board;
+  let rebalanced = false;
+  let position = positionBetween(before, after);
+
+  if (collapsed(before, after, position)) {
+    working = rebalanceColumn(board, input.columnId);
+    rebalanced = true;
+    const fresh = columnOrder(working, input.columnId, { exclude: input.sessionKey });
+    position = positionBetween(fresh[index - 1]?.position, fresh[index]?.position);
+  }
+
+  return {
+    board: movePlacement(working, {
+      sessionKey: input.sessionKey,
+      columnId: input.columnId,
+      position,
+      ...(input.source ? { source: input.source } : {}),
+      updatedAt: input.updatedAt,
+    }),
+    rebalanced,
+  };
+}
+
+function collapsed(
+  before: number | undefined,
+  after: number | undefined,
+  position: number,
+): boolean {
+  if (before === undefined || after === undefined) return false;
+  if (after - before < MIN_POSITION_GAP) return true;
+  return position <= before || position >= after;
+}
+
+/** Pins or unpins a card. An unplaced card lands at the end of the default column. */
+export function pinPlacement(
+  board: BoardDocument,
+  sessionKey: string,
+  pinned: boolean,
+  updatedAt: number,
+): BoardDocument {
+  const existing = board.placements[sessionKey];
+  if (existing) {
+    if (existing.pinned === pinned) return board;
+    return {
+      ...board,
+      placements: { ...board.placements, [sessionKey]: { ...existing, pinned, updatedAt } },
+    };
+  }
+
+  // Unpinning a card that has no placement changes nothing.
+  if (!pinned) return board;
+
+  const column =
+    board.columns.find((candidate) => candidate.id === board.defaultColumn) ?? board.columns[0];
+  if (!column) return board;
+
+  const order = columnOrder(board, column.id);
+  const position = order.length === 0 ? 0 : order[order.length - 1]!.position + 1;
+
+  return {
+    ...board,
+    placements: {
+      ...board.placements,
+      [sessionKey]: {
+        columnId: column.id,
+        position,
+        source: 'manual',
+        pinned,
+        ruleID: null,
+        updatedAt,
+        lastRuleEventID: null,
+      },
+    },
+  };
+}
+
+/** Drops a card's manual placement, so it renders in the default column again. */
+export function clearPlacement(board: BoardDocument, sessionKey: string): BoardDocument {
+  if (!board.placements[sessionKey]) return board;
+
+  const placements = { ...board.placements };
+  delete placements[sessionKey];
+  return { ...board, placements };
+}
+
+/** Deletes a column and appends its cards to the default column. The last column is never removed. */
+export function removeColumn(board: BoardDocument, columnId: string): BoardDocument {
+  const column = board.columns.find((candidate) => candidate.id === columnId);
+  if (!column) return board;
+
+  const fallback =
+    board.columns.find(
+      (candidate) => candidate.id === board.defaultColumn && candidate.id !== columnId,
+    ) ?? board.columns.find((candidate) => candidate.id !== columnId);
+  if (!fallback) return board;
+
+  const moved = columnOrder(board, columnId);
+  const target = columnOrder(board, fallback.id);
+  let position = target.length === 0 ? 0 : target[target.length - 1]!.position + 1;
+
+  const placements = { ...board.placements };
+  for (const card of moved) {
+    const placement = placements[card.key];
+    if (!placement) continue;
+    placements[card.key] = { ...placement, columnId: fallback.id, position };
+    position += 1;
+  }
+
+  return {
+    ...board,
+    columns: board.columns.filter((candidate) => candidate.id !== columnId),
+    defaultColumn: board.defaultColumn === columnId ? fallback.id : board.defaultColumn,
+    placements,
+  };
+}
+
+/** Removes the placements the caller reports as gone: deleted sessions, or an archived family. */
+export function prunePlacements(
+  board: BoardDocument,
+  shouldPrune: (sessionKey: string) => boolean,
+): { readonly board: BoardDocument; readonly keys: readonly string[] } {
+  const keys = Object.keys(board.placements).filter((key) => shouldPrune(key));
+  if (keys.length === 0) return { board, keys };
+
+  const placements = { ...board.placements };
+  for (const key of keys) delete placements[key];
+  return { board: { ...board, placements }, keys };
+}
+
+/**
+ * The board lock. Every location instance runs in the same server process, so one in-process
+ * mutex serializes writes; `Symbol.for` shares it between separately loaded copies of this module.
+ * The revision read-back in `commitBoard` stays as a second line of defence.
+ */
+export const BOARD_LOCK_KEY = Symbol.for('opencode-session-kanban.board-lock');
+
+type LockState = { tail: Promise<void> };
+
+function lockState(): LockState {
+  const holder = globalThis as unknown as Record<symbol, LockState | undefined>;
+  const existing = holder[BOARD_LOCK_KEY];
+  if (existing) return existing;
+
+  const created: LockState = { tail: Promise.resolve() };
+  holder[BOARD_LOCK_KEY] = created;
+  return created;
+}
+
+export async function withBoardLock<T>(task: () => Promise<T>): Promise<T> {
+  const state = lockState();
+  const previous = state.tail;
+  let release!: () => void;
+  state.tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
 // The write guard needs only these two members, so tests can pass an in-memory stand-in.
 export type BoardStorage = {
   get(key: string): Promise<Schema.Json | undefined>;
@@ -127,14 +352,21 @@ export type BoardStorage = {
 export type BoardMutation = (board: BoardDocument) => BoardDocument;
 
 /**
- * Reads the document, applies `mutate`, and writes only if no other instance wrote meanwhile.
- * Storage has no compare-and-set, so the guard is a read-back: a revision that differs means a
- * competing write and the whole step is retried from a fresh read.
+ * Serializes the read, apply, write step across every instance in this process, then keeps the
+ * revision read-back as a second line of defence. Storage has no compare-and-set.
  */
-export async function commitBoard(
+export function commitBoard(
   storage: BoardStorage,
   mutate: BoardMutation,
   options: { readonly attempts?: number } = {},
+): Promise<BoardDocument> {
+  return withBoardLock(() => commitUnlocked(storage, mutate, options));
+}
+
+async function commitUnlocked(
+  storage: BoardStorage,
+  mutate: BoardMutation,
+  options: { readonly attempts?: number },
 ): Promise<BoardDocument> {
   const attempts = options.attempts ?? MAX_WRITE_ATTEMPTS;
 

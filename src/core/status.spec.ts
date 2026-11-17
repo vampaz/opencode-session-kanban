@@ -6,6 +6,7 @@ import {
   familyArchived,
   groupForks,
   isVisible,
+  placementGone,
   projectLabel,
   rootID,
   selectCards,
@@ -73,6 +74,37 @@ describe('rootID', () => {
     ]);
 
     expect(rootID(sessions, 'a')).toBeUndefined();
+  });
+});
+
+describe('forks that carry only fork.sessionID', () => {
+  it('classifies them as forks and follows the source to the root', () => {
+    const sessions = map([
+      session({ id: 'root' }),
+      session({ id: 'fork', fork: { sessionID: 'root' } }),
+    ]);
+    const fork = sessions.get('fork')!;
+
+    expect(cardKind(fork)).toBe('fork');
+    expect(rootID(sessions, 'fork')).toBe('root');
+    expect(isVisible(sessions, fork, { showSubagents: false })).toBe(true);
+  });
+
+  it('hides a fork under an archived source', () => {
+    const sessions = map([
+      session({ id: 'root', archived: true }),
+      session({ id: 'fork', fork: { sessionID: 'root' } }),
+    ]);
+
+    expect(isVisible(sessions, sessions.get('fork')!, { showSubagents: false })).toBe(false);
+    expect(familyArchived(sessions, 'fork')).toBe(true);
+  });
+
+  it('hides a fork whose source was deleted', () => {
+    const sessions = map([session({ id: 'fork', fork: { sessionID: 'gone' } })]);
+
+    expect(rootID(sessions, 'fork')).toBeUndefined();
+    expect(isVisible(sessions, sessions.get('fork')!, { showSubagents: false })).toBe(false);
   });
 });
 
@@ -155,6 +187,59 @@ describe('selectCards', () => {
   });
 });
 
+describe('placementGone', () => {
+  const facts = (list: SessionFacts[]) => map(list);
+
+  it('keeps a placement whose ancestor is not loaded yet', () => {
+    const sessions = facts([session({ id: 'fork', fork: { sessionID: 'root' } })]);
+
+    expect(placementGone(sessions, () => false, 'fork')).toBe(false);
+  });
+
+  it('keeps a placement for a session the window has not loaded', () => {
+    expect(placementGone(facts([]), () => false, 'unknown')).toBe(false);
+  });
+
+  it('reports a missing session as gone', () => {
+    expect(placementGone(facts([]), (id) => id === 'gone', 'gone')).toBe(true);
+  });
+
+  it('reports a missing ancestor as gone', () => {
+    const sessions = facts([session({ id: 'fork', fork: { sessionID: 'gone' } })]);
+
+    expect(placementGone(sessions, (id) => id === 'gone', 'fork')).toBe(true);
+  });
+
+  it('reports a family under an archived root as gone', () => {
+    const sessions = facts([
+      session({ id: 'root', archived: true }),
+      session({ id: 'fork', fork: { sessionID: 'root' } }),
+    ]);
+
+    expect(placementGone(sessions, () => false, 'fork')).toBe(true);
+    expect(placementGone(sessions, () => false, 'root')).toBe(true);
+  });
+
+  it('keeps an archived session in the middle of a live family', () => {
+    const sessions = facts([
+      session({ id: 'root' }),
+      session({ id: 'mid', fork: { sessionID: 'root' }, archived: true }),
+      session({ id: 'tip', fork: { sessionID: 'mid' } }),
+    ]);
+
+    expect(placementGone(sessions, () => false, 'tip')).toBe(false);
+  });
+
+  it('keeps a cycle', () => {
+    const sessions = facts([
+      session({ id: 'a', fork: { sessionID: 'b' } }),
+      session({ id: 'b', fork: { sessionID: 'a' } }),
+    ]);
+
+    expect(placementGone(sessions, () => false, 'a')).toBe(false);
+  });
+});
+
 describe('groupForks', () => {
   it('puts a fork right after its root', () => {
     const cards: { id: string; kind: CardKind; rootID: string }[] = [
@@ -182,5 +267,8 @@ describe('projectLabel', () => {
     expect(projectLabel('/work/session-kanban')).toBe('session-kanban');
     expect(projectLabel('/work/session-kanban/')).toBe('session-kanban');
     expect(projectLabel('/work/mono', 'packages/ui')).toBe('mono/packages/ui');
+    expect(projectLabel('/tmp/sk-kanban-scratch', '../../../tmp/sk-kanban-scratch')).toBe(
+      'sk-kanban-scratch',
+    );
   });
 });

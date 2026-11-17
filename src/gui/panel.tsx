@@ -29,6 +29,8 @@ export function addPanel(ctx: UiContext): void {
       icon: 'dot-grid',
     },
     list: () => [tab],
-    render: () => <Board ctx={ctx} />,
+    render: (props) => (
+      <Board ctx={ctx} session={() => props.session} directory={() => props.session.directory} />
+    ),
   });
 }

@@ -1,17 +1,25 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import type { UiMenuEntry } from '@opencode/plugin/gui';
+import type { SessionRef, UiMenuEntry } from '@opencode/plugin/gui';
 
-import { type BoardDocument, type Column, type Placement } from '../core/board';
+import { type BoardDocument, type Column, dropPlacement, prunePlacements } from '../core/board';
+import { selectBootstrapSessions } from '../core/bootstrap';
 import { filterCards, isFiltering } from '../core/filter';
 import { groupForks, projectLabel, selectCards, type CardStatus } from '../core/status';
-import { SessionCard, type CardView } from './card';
+import { SessionCard, type CardActions, type CardView } from './card';
 import { kanbanClient, type UiContext } from './client';
-import { activityOf, factsOf, rowsOf, serverOf } from './sessions';
+import { boardKey } from './key';
+import { openNewSession } from './new-session';
+import { activityOf, factsOf, isGone, rowsOf, serverOf } from './sessions';
 import { useViewFilters } from './view';
 
 type Phase = 'loading' | 'ready' | 'stale' | 'error';
 
-type ColumnView = { readonly column: Column; readonly cards: readonly CardView[] };
+type ColumnView = {
+  readonly column: Column;
+  readonly cards: readonly CardView[];
+  /** Every card key in the column, in placement order, for drop indexes. */
+  readonly order: readonly string[];
+};
 
 const STATUSES: readonly ('all' | CardStatus)[] = [
   'all',
@@ -22,24 +30,40 @@ const STATUSES: readonly ('all' | CardStatus)[] = [
   'interrupted',
 ];
 
+/** The fork pass reads at most this many pages before it stops. */
+const FORK_PAGES = 5;
+
 /**
- * The read-only board. Reads the document through RPC and the sessions from the window's synced
- * data; a `changed` event or a reconnection refreshes it. It never writes.
+ * The board. Reads the document through RPC and the sessions from the window's synced data.
+ * Moves are optimistic: the dropped document renders at once and reverts when the write fails.
  */
-export function Board(props: { ctx: UiContext }) {
+export function Board(props: {
+  ctx: UiContext;
+  session?: () => SessionRef | undefined;
+  directory?: () => string | undefined;
+}) {
   const ctx = props.ctx;
   const view = useViewFilters(ctx);
   const [board, setBoard] = createSignal<BoardDocument>();
   const [error, setError] = createSignal<string>();
+  const [dragging, setDragging] = createSignal<string>();
+  const [overColumn, setOverColumn] = createSignal<string>();
+  const [bootstrapped, setBootstrapped] = createSignal(false);
 
   const server = () => serverOf(ctx);
   const connected = () => server()?.connected ?? false;
   const filters = () => view.filters();
+  const routed = () => props.session?.() ?? ctx.sessions.current();
 
   const phase = (): Phase => {
     if (!board()) return error() ? 'error' : 'loading';
     return connected() ? 'ready' : 'stale';
   };
+
+  function fail(toastKey: string, cause?: unknown): void {
+    if (cause !== undefined) console.error('[kanban]', cause);
+    ctx.toast.show({ title: ctx.t(toastKey), variant: 'error' });
+  }
 
   async function refresh(): Promise<void> {
     try {
@@ -51,24 +75,51 @@ export function Board(props: { ctx: UiContext }) {
     }
   }
 
-  /** Loads the sessions of every project once, then the window's synced data keeps them current. */
+  /**
+   * Roots first, then one capped pass over every non-archived session for the forks whose root is
+   * not loaded yet. Only forks and their missing ancestors are remembered, so subagents stay out.
+   */
   let listing = false;
   async function bootstrap(): Promise<void> {
     const current = server();
     if (!current || listing) return;
-
     listing = true;
+    setBootstrapped(false);
+
     try {
-      const response = await current.client.session.list({
+      const roots = await current.client.session.list({
         parentID: null,
         archived: false,
         limit: 200,
       });
-      for (const info of response.data) current.data.session.remember(info);
+      for (const info of roots.data) current.data.session.remember(info);
+
+      let cursor: string | undefined;
+      for (let page = 0; page < FORK_PAGES; page += 1) {
+        const response = await current.client.session.list({
+          archived: false,
+          limit: 200,
+          ...(cursor ? { cursor } : {}),
+        });
+        const known = new Set(current.data.session.list().map((info) => info.id));
+        const picks = selectBootstrapSessions(response.data, known, {
+          showSubagents: board()?.settings.showSubagents ?? false,
+        });
+
+        for (const pick of picks) {
+          const info = response.data.find((row) => row.id === pick.id);
+          if (info) current.data.session.remember(info);
+        }
+
+        const next = response.cursor.next ?? undefined;
+        if (!next || next === cursor) break;
+        cursor = next;
+      }
     } catch (cause) {
       console.error('[kanban] could not list sessions', cause);
     } finally {
       listing = false;
+      setBootstrapped(true);
     }
   }
 
@@ -102,21 +153,31 @@ export function Board(props: { ctx: UiContext }) {
   });
 
   const cards = createMemo<CardView[]>(() => {
+    const document = board();
     const current = server();
-    if (!current) return [];
+    if (!document || !current) return [];
 
     const rows = rowsOf(current);
     const states = selectCards(factsOf(rows), {
       ...activityOf(current),
-      showSubagents: board()?.settings.showSubagents ?? false,
+      showSubagents: document.settings.showSubagents,
     });
     const byID = new Map(rows.map((row) => [row.id, row]));
 
     return states.map((state) => {
       const row = byID.get(state.id);
+      const key = `${current.id}\n${state.id}`;
+      const placement = document.placements[key];
+      const columnId =
+        placement && document.columns.some((column) => column.id === placement.columnId)
+          ? placement.columnId
+          : document.defaultColumn;
+
       return {
         ...state,
-        key: `${current.id}\n${state.id}`,
+        key,
+        columnId,
+        pinned: placement?.pinned ?? false,
         title: row?.title?.trim() || ctx.t('card.untitled'),
         directory: row?.location.directory ?? '',
         subpath: row?.subpath,
@@ -133,24 +194,218 @@ export function Board(props: { ctx: UiContext }) {
     const document = board();
     if (!document) return [];
 
-    const fallback =
-      document.columns.find((column) => column.id === document.defaultColumn) ??
-      document.columns[0];
-    const byColumn = new Map<string, CardView[]>(document.columns.map((column) => [column.id, []]));
-
-    for (const card of filtered()) {
-      const placement = document.placements[card.key];
-      const columnID =
-        placement && byColumn.has(placement.columnId) ? placement.columnId : fallback?.id;
-      if (columnID) byColumn.get(columnID)?.push(card);
-    }
+    const all = cards();
+    const visible = filtered();
+    const compare = comparePlacements(document);
 
     return document.columns.map((column) => {
-      const placed = (byColumn.get(column.id) ?? [])
-        .slice()
-        .sort(comparePlacements(document.placements, column.id));
-      return { column, cards: groupForks(placed) };
+      const order = all
+        .filter((card) => card.columnId === column.id)
+        .sort(compare)
+        .map((card) => card.key);
+      const list = visible.filter((card) => card.columnId === column.id).sort(compare);
+      return { column, order, cards: groupForks(list) };
     });
+  });
+
+  function indexFor(columnId: string, beforeKey?: string, excludeKey?: string): number {
+    const entry = columns().find((candidate) => candidate.column.id === columnId);
+    if (!entry) return 0;
+
+    const order = excludeKey ? entry.order.filter((key) => key !== excludeKey) : entry.order;
+    if (!beforeKey) return order.length;
+
+    const index = order.indexOf(beforeKey);
+    return index === -1 ? order.length : index;
+  }
+
+  function indexAfter(columnId: string, key: string, excludeKey?: string): number {
+    const entry = columns().find((candidate) => candidate.column.id === columnId);
+    if (!entry) return 0;
+
+    const order = excludeKey ? entry.order.filter((item) => item !== excludeKey) : entry.order;
+    const index = order.indexOf(key);
+    return index === -1 ? order.length : index + 1;
+  }
+
+  async function moveCard(sessionKey: string, columnId: string, index: number): Promise<void> {
+    const previous = board();
+    if (!previous) return;
+
+    const optimistic = dropPlacement(previous, {
+      sessionKey,
+      columnId,
+      index,
+      updatedAt: Date.now(),
+    }).board;
+    setBoard(optimistic);
+    setDragging(undefined);
+    setOverColumn(undefined);
+
+    try {
+      await kanbanClient(ctx).move({ sessionKey, columnId, index });
+      await refresh();
+    } catch (cause) {
+      setBoard(previous);
+      fail('move.failed', cause);
+    }
+  }
+
+  function dragKey(event: DragEvent): string {
+    return event.dataTransfer?.getData('text/plain') || dragging() || '';
+  }
+
+  function dragStart(event: DragEvent, card: CardView): void {
+    setDragging(card.key);
+    event.dataTransfer?.setData('text/plain', card.key);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function dragEnd(): void {
+    setDragging(undefined);
+    setOverColumn(undefined);
+  }
+
+  function dropOnColumn(event: DragEvent, columnId: string): void {
+    event.preventDefault();
+    const sessionKey = dragKey(event);
+    setDragging(undefined);
+    setOverColumn(undefined);
+    if (!sessionKey) return;
+    void moveCard(sessionKey, columnId, indexFor(columnId, undefined, sessionKey));
+  }
+
+  function dropOnCard(event: DragEvent, card: CardView): void {
+    const sessionKey = dragKey(event);
+    setDragging(undefined);
+    setOverColumn(undefined);
+    if (!sessionKey || sessionKey === card.key) return;
+    void moveCard(sessionKey, card.columnId, indexFor(card.columnId, card.key, sessionKey));
+  }
+
+  function openCard(card: CardView): void {
+    const current = server();
+    if (!current) return;
+
+    ctx.tabs.open({ server: current.id, id: card.id }, { focus: true });
+
+    const session = routed();
+    const key = boardKey(ctx);
+    if (ctx.layout.narrow() && session && ctx.layout.state(key, session) === 'visible') {
+      ctx.layout.hide(key, session);
+    }
+  }
+
+  async function togglePin(card: CardView): Promise<void> {
+    try {
+      await kanbanClient(ctx).setPinned({ sessionKey: card.key, pinned: !card.pinned });
+      await refresh();
+    } catch (cause) {
+      fail('pin.failed', cause);
+    }
+  }
+
+  async function archiveCard(card: CardView): Promise<void> {
+    const current = server();
+    if (!current) return;
+
+    try {
+      await current.client.session.update({ sessionID: card.id, archived: true });
+    } catch (cause) {
+      fail('archive.failed', cause);
+    }
+  }
+
+  async function copyCard(card: CardView): Promise<void> {
+    try {
+      await ctx.system.copy(card.id);
+      ctx.toast.show({ title: ctx.t('card.copied') });
+    } catch (cause) {
+      fail('copy.failed', cause);
+    }
+  }
+
+  async function forkCard(card: CardView): Promise<void> {
+    const current = server();
+    if (!current) return;
+
+    const confirmed = await ctx.dialogs.confirm({
+      title: ctx.t('fork.title', { title: card.title }),
+      description: ctx.t('fork.description'),
+      confirm: ctx.t('fork.confirm'),
+    });
+    if (!confirmed) return;
+
+    try {
+      const info = await current.client.session.fork({ sessionID: card.id });
+      current.data.session.remember(info);
+
+      const forkKey = `${current.id}\n${info.id}`;
+      await kanbanClient(ctx).move({
+        sessionKey: forkKey,
+        columnId: card.columnId,
+        index: indexAfter(card.columnId, card.key, forkKey),
+      });
+
+      ctx.tabs.open({ server: current.id, id: info.id }, { focus: true });
+    } catch (cause) {
+      fail('fork.failed', cause);
+    }
+  }
+
+  const actions: CardActions = {
+    open: openCard,
+    moveTo: (card, columnId) => {
+      void moveCard(card.key, columnId, indexFor(columnId, undefined, card.key));
+    },
+    fork: (card) => {
+      void forkCard(card);
+    },
+    togglePin: (card) => {
+      void togglePin(card);
+    },
+    archive: (card) => {
+      void archiveCard(card);
+    },
+    copyID: (card) => {
+      void copyCard(card);
+    },
+  };
+
+  function addToColumn(column: Column): void {
+    openNewSession(ctx, {
+      columnId: column.id,
+      directory: props.directory?.() ?? ctx.sessions.current()?.directory,
+      index: () => indexFor(column.id),
+    });
+  }
+
+  // Placements of deleted sessions and archived families are pruned here, on the read path.
+  const prunable = createMemo<readonly string[]>(() => {
+    const document = board();
+    const current = server();
+    if (!document || !current) return [];
+
+    const facts = new Map(factsOf(rowsOf(current)).map((fact) => [fact.id, fact]));
+    return prunePlacements(document, (key) => isGone(current, facts, key)).keys;
+  });
+
+  let pruning = false;
+  createEffect(() => {
+    // Never prune while the session list is still loading or paging: an unloaded ancestor would
+    // look gone. The pure check keeps unknown ancestors anyway; this is the second guard.
+    if (phase() !== 'ready' || !bootstrapped()) return;
+
+    const keys = prunable();
+    if (keys.length === 0 || pruning) return;
+
+    pruning = true;
+    void kanbanClient(ctx)
+      .prune({ keys: [...keys] })
+      .catch((cause) => console.error('[kanban] prune failed', cause))
+      .finally(() => {
+        pruning = false;
+      });
   });
 
   function projects(): string[] {
@@ -257,16 +512,50 @@ export function Board(props: { ctx: UiContext }) {
           <div class="sk-columns">
             <For each={columns()}>
               {(entry) => (
-                <section class="sk-column">
+                <section
+                  class="sk-column"
+                  classList={{
+                    'sk-column--over': dragging() !== undefined && overColumn() === entry.column.id,
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setOverColumn(entry.column.id);
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDragLeave={() => {
+                    if (overColumn() === entry.column.id) setOverColumn(undefined);
+                  }}
+                  onDrop={(event) => dropOnColumn(event, entry.column.id)}
+                >
                   <header class="sk-column__head">
                     <span>{entry.column.title}</span>
-                    <span class="sk-column__count">{entry.cards.length}</span>
+                    <span class="sk-column__tools">
+                      <span class="sk-column__count">{entry.cards.length}</span>
+                      <ctx.ui.IconButton
+                        icon="plus"
+                        label={ctx.t('column.newSession')}
+                        onClick={() => addToColumn(entry.column)}
+                      />
+                    </span>
                   </header>
                   <Show
                     when={entry.cards.length > 0}
                     fallback={<p class="sk-column__empty">{ctx.t('board.columnEmpty')}</p>}
                   >
-                    <For each={entry.cards}>{(card) => <SessionCard ctx={ctx} card={card} />}</For>
+                    <For each={entry.cards}>
+                      {(card) => (
+                        <SessionCard
+                          ctx={ctx}
+                          card={card}
+                          columns={board()?.columns ?? []}
+                          dragging={dragging() === card.key}
+                          actions={actions}
+                          onDragStart={dragStart}
+                          onDragEnd={dragEnd}
+                          onDrop={dropOnCard}
+                        />
+                      )}
+                    </For>
                   </Show>
                 </section>
               )}
@@ -278,14 +567,16 @@ export function Board(props: { ctx: UiContext }) {
   );
 }
 
-function comparePlacements(placements: Readonly<Record<string, Placement>>, columnID: string) {
+function comparePlacements(document: BoardDocument) {
   return (left: CardView, right: CardView): number => {
-    const leftPlacement = placements[left.key];
-    const rightPlacement = placements[right.key];
+    const leftPlacement = document.placements[left.key];
+    const rightPlacement = document.placements[right.key];
     const leftPosition =
-      leftPlacement?.columnId === columnID ? leftPlacement.position : Number.POSITIVE_INFINITY;
+      leftPlacement?.columnId === left.columnId ? leftPlacement.position : Number.POSITIVE_INFINITY;
     const rightPosition =
-      rightPlacement?.columnId === columnID ? rightPlacement.position : Number.POSITIVE_INFINITY;
+      rightPlacement?.columnId === right.columnId
+        ? rightPlacement.position
+        : Number.POSITIVE_INFINITY;
 
     if (leftPosition !== rightPosition) return leftPosition - rightPosition;
     return right.updated - left.updated;

@@ -1,6 +1,6 @@
 import type { ServerRef } from '@opencode/plugin/gui';
 
-import { selectCards, type SessionFacts } from '../core/status';
+import { placementGone, selectCards, type SessionFacts } from '../core/status';
 import type { UiContext } from './client';
 
 /** The session fields the board and the header chip read. `Session.Info` satisfies this shape. */
@@ -63,4 +63,22 @@ export function countsOf(
     running: cards.filter((card) => card.status === 'running').length,
     waiting: cards.filter((card) => card.status === 'waiting').length,
   };
+}
+
+/** The session id part of a `SessionRef.key` (`<server id>\n<session id>`). */
+export function sessionIDOf(sessionKey: string): string {
+  const index = sessionKey.indexOf('\n');
+  return index === -1 ? sessionKey : sessionKey.slice(index + 1);
+}
+
+/**
+ * Whether a placement's session is known to be gone. The decision is pure; this wrapper supplies
+ * the window's `missing` set, which marks sessions the server reported as deleted.
+ */
+export function isGone(
+  server: ServerRef,
+  facts: ReadonlyMap<string, SessionFacts>,
+  sessionKey: string,
+): boolean {
+  return placementGone(facts, (id) => server.data.session.missing(id), sessionIDOf(sessionKey));
 }
