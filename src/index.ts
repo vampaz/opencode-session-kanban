@@ -47,9 +47,6 @@ export default Plugin.define({
         await rpc.events.emit('changed', { revision: board.revision });
         return { revision: board.revision };
       },
-
-      // M0 spike only: identity of the instance that answered this call.
-      whoami: async () => ({ instanceId, pid, directory, setupAt }),
     });
   },
 });

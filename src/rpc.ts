@@ -104,27 +104,12 @@ const revisionSchema = {
   additionalProperties: false,
 } as const;
 
-/** M0 spike only: what answers a call, so a window in one location can see another location serve it. */
-const whoamiSchema = {
-  type: 'object',
-  properties: {
-    instanceId: { type: 'string' },
-    pid: { type: 'number' },
-    directory: { type: ['string', 'null'] },
-    setupAt: { type: 'string' },
-  },
-  required: ['instanceId', 'pid', 'directory', 'setupAt'],
-  additionalProperties: false,
-} as const;
-
 /** The contract between the server part and the desktop GUI. */
 export const Kanban = Rpc.define({
   id: 'kanban',
   methods: {
     snapshot: { input: emptyInput, output: snapshotSchema },
     move: { input: moveInput, output: revisionSchema },
-    // M0 spike only. Remove at M1, with the diagnostic footer in the board.
-    whoami: { input: emptyInput, output: whoamiSchema },
   },
   events: {
     changed: {

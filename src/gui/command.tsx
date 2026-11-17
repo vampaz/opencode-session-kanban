@@ -5,24 +5,47 @@ import { openQuickBoard } from './dialog';
 
 const TAB_ID = 'board';
 
-/** `kanban.open`: toggles the board on the routed session, and opens the quick board from Home. */
+export function boardKey(ctx: UiContext): string {
+  return `${ctx.id}:${TAB_ID}`;
+}
+
+/** Shows the board on the routed session, or the quick board from Home. Never hides it. */
+export function openBoard(ctx: UiContext): void {
+  const session = ctx.sessions.current();
+  if (!session) {
+    openQuickBoard(ctx);
+    return;
+  }
+
+  const key = boardKey(ctx);
+  if (ctx.layout.state(key, session) !== 'visible') {
+    ctx.layout.open(key, session, { tab: 'select' });
+  }
+}
+
+/** The command's behavior: hide the board when it is the one showing. */
+function toggleBoard(ctx: UiContext): void {
+  const session = ctx.sessions.current();
+  if (!session) {
+    openQuickBoard(ctx);
+    return;
+  }
+
+  const key = boardKey(ctx);
+  if (ctx.layout.state(key, session) === 'visible') ctx.layout.hide(key, session);
+  else ctx.layout.open(key, session, { tab: 'select' });
+}
+
+/** `kanban.open`, with `mod+shift+b` and `/kanban`. */
 export function addCommands(ctx: UiContext): void {
-  ctx.add(Command, () => ({
+  ctx.add(Command, (): Command => ({
     id: 'open',
     title: ctx.t('command.open'),
-    group: ctx.t('board.title'),
+    description: ctx.t('command.openDescription'),
     keywords: 'kanban board sessions',
+    group: ctx.t('board.title'),
     bind: 'mod+shift+b',
-    run: () => {
-      const session = ctx.sessions.current();
-      if (!session) {
-        openQuickBoard(ctx);
-        return;
-      }
-
-      const key = `${ctx.id}:${TAB_ID}`;
-      if (ctx.layout.state(key, session) === 'visible') ctx.layout.hide(key, session);
-      else ctx.layout.open(key, session, { tab: 'select' });
-    },
+    slash: { name: 'kanban' },
+    run: () => toggleBoard(ctx),
   }));
 }
