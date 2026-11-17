@@ -113,7 +113,11 @@ src/
 
 - Registers the RPC contract and the `kanban` tool namespace.
 - Owns the board document in `ctx.storage`, guarded by `revision`.
-- Runs the rules engine over the `AsyncIterable` from `ctx.event.subscribe({ types: [...] })`.
+- Runs the rules engine over the `AsyncIterable` from `ctx.event.subscribe({ types: [...] })`. Every
+  location instance sees the server's events; the board lock and the `(rule, session, event)` dedupe
+  make duplicate instances harmless. One engine and its idle tick are elected per process through
+  `globalThis`, with takeover when the owner unloads. Rules only touch sessions that render as cards
+  (roots and forks; subagents only with `showSubagents`).
 - Emits `changed` after every mutation, and `notify` intents for rule actions that need a window.
 
 ### RPC contract
@@ -123,16 +127,18 @@ Methods:
 | Method | Input | Output |
 | --- | --- | --- |
 | `snapshot` | — | `{ version, revision, columns, placements[], rules[], settings }` |
-| `move` | `{ sessionKey, columnId, index, source }` | `{ revision }` |
+| `move` | `{ sessionKey, columnId, index, source? }` | `{ revision }` |
 | `setPinned` | `{ sessionKey, pinned }` | `{ revision }` |
 | `clearManual` | `{ sessionKey }` | `{ revision }` |
 | `prune` | `{ keys }` | `{ revision }` |
 | `columns.upsert` / `columns.remove` / `columns.reorder` | column patch | `{ revision }` |
+| `columns.default` | `{ id }` | `{ revision }` |
 | `rules.upsert` / `rules.remove` / `rules.reorder` | rule patch | `{ revision }` |
 | `rules.preview` | — | `{ moves: { sessionKey, from, to, ruleID }[] }` |
 | `settings.update` | partial settings | `{ revision }` |
 | `createSession` | `{ directory, title?, prompt?, columnId }` | `{ sessionKey }` |
 | `forkSession` | `{ sessionKey, columnId? }` | `{ sessionKey }` |
+| `board.replace` | `{ document }` | `{ revision }` |
 
 Events: `changed` `{ revision }`, `notify` `{ id, title, message, variant, sessionKey }`.
 

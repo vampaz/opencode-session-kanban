@@ -81,9 +81,10 @@ export function SessionCard(props: {
       class="sk-card"
       classList={{
         'sk-card--fork': props.card.kind === 'fork',
+        'sk-card--archived': props.card.archived,
         'sk-card--dragging': props.dragging,
       }}
-      draggable
+      draggable={!props.card.archived}
       onDragStart={(event) => props.onDragStart(event, props.card)}
       onDragEnd={() => props.onDragEnd()}
       onDragOver={(event) => event.preventDefault()}

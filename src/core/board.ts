@@ -308,6 +308,64 @@ export function prunePlacements(
   return { board: { ...board, placements }, keys };
 }
 
+export function upsertColumn(board: BoardDocument, column: Column): BoardDocument {
+  const exists = board.columns.some((candidate) => candidate.id === column.id);
+  const columns = exists
+    ? board.columns.map((candidate) => (candidate.id === column.id ? column : candidate))
+    : [...board.columns, column];
+
+  return { ...board, columns: orderColumns(columns) };
+}
+
+export function reorderColumns(board: BoardDocument, ids: readonly string[]): BoardDocument {
+  const order = new Map(ids.map((id, index) => [id, index]));
+  const columns = board.columns.map((column) =>
+    order.has(column.id) ? { ...column, order: order.get(column.id)! } : column,
+  );
+
+  return { ...board, columns: orderColumns(columns) };
+}
+
+function orderColumns(columns: readonly Column[]): Column[] {
+  return [...columns].sort(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
+}
+
+export function upsertRule(board: BoardDocument, rule: Rule): BoardDocument {
+  const exists = board.rules.some((candidate) => candidate.id === rule.id);
+  const rules = exists
+    ? board.rules.map((candidate) => (candidate.id === rule.id ? rule : candidate))
+    : [...board.rules, rule];
+
+  return { ...board, rules };
+}
+
+export function removeRule(board: BoardDocument, ruleID: string): BoardDocument {
+  if (!board.rules.some((candidate) => candidate.id === ruleID)) return board;
+  return { ...board, rules: board.rules.filter((candidate) => candidate.id !== ruleID) };
+}
+
+export function reorderRules(board: BoardDocument, ids: readonly string[]): BoardDocument {
+  const priority = new Map(ids.map((id, index) => [id, index]));
+
+  return {
+    ...board,
+    rules: board.rules.map((rule) =>
+      priority.has(rule.id) ? { ...rule, priority: priority.get(rule.id)! } : rule,
+    ),
+  };
+}
+
+export function updateSettings(board: BoardDocument, patch: Partial<BoardSettings>): BoardDocument {
+  const settings: BoardSettings = { ...board.settings, ...patch };
+  const unchanged = (Object.keys(settings) as (keyof BoardSettings)[]).every(
+    (key) => settings[key] === board.settings[key],
+  );
+
+  return unchanged ? board : { ...board, settings };
+}
+
 /**
  * The board lock. Every location instance runs in the same server process, so one in-process
  * mutex serializes writes; `Symbol.for` shares it between separately loaded copies of this module.
