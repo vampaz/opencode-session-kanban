@@ -23,20 +23,39 @@ export type CardState = {
   readonly updated: number;
 };
 
+/** The fields that decide what a session is on the board. */
+export type SessionShape = {
+  readonly parentID?: string | undefined;
+  readonly fork?: unknown;
+};
+
 export type SelectOptions = {
   readonly running: ReadonlySet<string>;
   readonly waiting: ReadonlySet<string>;
   readonly showSubagents: boolean;
+  /** Keep sessions of an archived family, for the board's Archived column. */
+  readonly includeArchived?: boolean;
 };
 
-export function cardKind(session: SessionFacts): CardKind {
+export function cardKind(session: SessionShape): CardKind {
   // The server marks a fork with `fork`; it carries no `parentID`, so the flag decides.
   if (session.fork !== undefined && session.fork !== null) return 'fork';
   return session.parentID ? 'subagent' : 'root';
 }
 
+/**
+ * Rules only touch sessions that render as cards: roots and forks. A subagent has no card unless
+ * `showSubagents` is on. This is the same classification the board uses.
+ */
+export function rulesApplyTo(
+  session: SessionShape,
+  options: { readonly showSubagents: boolean },
+): boolean {
+  return cardKind(session) !== 'subagent' || options.showSubagents;
+}
+
 /** The session a fork copied, from `fork.sessionID`. Subagents use `parentID` instead. */
-function parentOf(session: SessionFacts): string | undefined {
+function parentOf(session: SessionShape): string | undefined {
   const fork = session.fork;
   if (typeof fork === 'object' && fork !== null) {
     const source = (fork as { readonly sessionID?: unknown }).sessionID;
@@ -146,7 +165,8 @@ export function selectCards(
   const cards: CardState[] = [];
 
   for (const session of sessions) {
-    if (!isVisible(byID, session, options)) continue;
+    const archived = familyArchived(byID, session.id);
+    if (!isVisible(byID, session, options) && !(options.includeArchived && archived)) continue;
 
     cards.push({
       id: session.id,
@@ -157,7 +177,7 @@ export function selectCards(
         running: options.running.has(session.id),
         waiting: options.waiting.has(session.id),
       }),
-      archived: session.archived,
+      archived,
       updated: session.updated,
     });
   }

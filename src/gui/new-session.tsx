@@ -81,6 +81,7 @@ function NewSessionDialog(props: {
         sessionKey: `${current.id}\n${info.id}`,
         columnId: props.columnId,
         index: props.index(),
+        source: 'auto',
       });
 
       if (prompt().trim()) {

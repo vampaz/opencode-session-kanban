@@ -7,6 +7,7 @@ import {
   groupForks,
   isVisible,
   placementGone,
+  rulesApplyTo,
   projectLabel,
   rootID,
   selectCards,
@@ -108,6 +109,26 @@ describe('forks that carry only fork.sessionID', () => {
   });
 });
 
+describe('rulesApplyTo', () => {
+  it('allows roots and forks, and subagents only when they are shown', () => {
+    const root = session({ id: 'root' });
+    const fork = session({ id: 'fork', fork: { sessionID: 'root' } });
+    const subagent = session({ id: 'sub', parentID: 'root' });
+
+    expect(rulesApplyTo(root, { showSubagents: false })).toBe(true);
+    expect(rulesApplyTo(fork, { showSubagents: false })).toBe(true);
+    expect(rulesApplyTo(subagent, { showSubagents: false })).toBe(false);
+    expect(rulesApplyTo(subagent, { showSubagents: true })).toBe(true);
+  });
+
+  it('uses fork before parentID, like the board', () => {
+    expect(
+      rulesApplyTo({ parentID: 'root', fork: { sessionID: 'root' } }, { showSubagents: false }),
+    ).toBe(true);
+    expect(rulesApplyTo({ parentID: 'root' }, { showSubagents: false })).toBe(false);
+  });
+});
+
 describe('visibility', () => {
   it('hides subagents unless they are enabled', () => {
     const sessions = map(family());
@@ -174,6 +195,23 @@ describe('selectCards', () => {
     expect(cards.map((card) => card.id)).toEqual(['root', 'fork', 'forkOfFork']);
     expect(cards.map((card) => card.status)).toEqual(['waiting', 'running', 'idle']);
     expect(cards.map((card) => card.rootID)).toEqual(['root', 'root', 'root']);
+  });
+
+  it('keeps archived cards when the board shows an Archived column', () => {
+    const sessions = [
+      session({ id: 'root', archived: true }),
+      session({ id: 'fork', parentID: 'root', fork: { sessionID: 'root' } }),
+      session({ id: 'live' }),
+    ];
+    const cards = selectCards(sessions, {
+      running: new Set(),
+      waiting: new Set(),
+      showSubagents: false,
+      includeArchived: true,
+    });
+
+    expect(cards.map((card) => card.id)).toEqual(['root', 'fork', 'live']);
+    expect(cards.map((card) => card.archived)).toEqual([true, true, false]);
   });
 
   it('reads waiting from the window data for forks', () => {

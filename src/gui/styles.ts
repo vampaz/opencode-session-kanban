@@ -149,6 +149,11 @@ export const boardStyles = `
   opacity: 0.45;
 }
 
+.sk-card--archived {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .sk-card--fork {
   border-inline-start: 2px solid var(--border-interactive-base, var(--border-base, currentColor));
 }
@@ -251,6 +256,129 @@ export const boardStyles = `
 
 .sk-form__row > :first-child {
   flex: 1;
+  min-width: 0;
+}
+
+.sk-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sk-settings__loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.sk-settings__column,
+.sk-settings__rule {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-base, currentColor);
+}
+
+.sk-settings__grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.sk-settings__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sk-settings__meta {
+  color: var(--text-weak, inherit);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.sk-settings__control {
+  min-width: 96px;
+}
+
+.sk-settings__add {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.sk-settings__add > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.sk-settings__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.sk-settings__moves {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  text-align: end;
+}
+
+.sk-color {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-base, currentColor);
+  border-radius: 6px;
+  background: transparent;
+}
+
+.sk-textarea {
+  min-height: 220px;
+  padding: 8px;
+  color: var(--text-base, inherit);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  background: var(--surface-base, transparent);
+  border: 1px solid var(--border-base, currentColor);
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.sk-rule__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sk-rule__title {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.sk-rule__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 8px;
+}
+
+.sk-rule__condition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.sk-rule__condition > * {
   min-width: 0;
 }
 

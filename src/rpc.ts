@@ -94,6 +94,9 @@ const moveInput = {
     // The index among the target column's cards. The server reads its own document, so a caller
     // never needs to compute a fractional position from a snapshot it may have already lost.
     index: { type: 'number' },
+    // `auto` marks a placement the board chose (a new session's column), not a person's override,
+    // so rules may still move it. Omitted means `manual`.
+    source: { type: 'string', enum: ['manual', 'auto'] },
   },
   required: ['sessionKey', 'columnId', 'index'],
   additionalProperties: false,
@@ -123,6 +126,83 @@ const pruneInput = {
   additionalProperties: false,
 } as const;
 
+const ruleInput = {
+  type: 'object',
+  properties: { rule: { type: 'object' } },
+  required: ['rule'],
+  additionalProperties: false,
+} as const;
+
+const columnInput = {
+  type: 'object',
+  properties: { column: { type: 'object' } },
+  required: ['column'],
+  additionalProperties: false,
+} as const;
+
+const idInput = {
+  type: 'object',
+  properties: { id: { type: 'string' } },
+  required: ['id'],
+  additionalProperties: false,
+} as const;
+
+const idsInput = {
+  type: 'object',
+  properties: { ids: { type: 'array', items: { type: 'string' } } },
+  required: ['ids'],
+  additionalProperties: false,
+} as const;
+
+const settingsInput = {
+  type: 'object',
+  properties: { patch: { type: 'object' } },
+  required: ['patch'],
+  additionalProperties: false,
+} as const;
+
+const documentInput = {
+  type: 'object',
+  properties: { document: { type: 'object' } },
+  required: ['document'],
+  additionalProperties: false,
+} as const;
+
+const previewSchema = {
+  type: 'object',
+  properties: {
+    moves: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          sessionKey: { type: 'string' },
+          from: { type: 'string' },
+          to: { type: 'string' },
+          ruleID: { type: 'string' },
+        },
+        required: ['sessionKey', 'from', 'to', 'ruleID'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['moves'],
+  additionalProperties: false,
+} as const;
+
+const notifySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    message: { type: 'string' },
+    variant: { type: 'string', enum: ['default', 'error'] },
+    sessionKey: { type: 'string' },
+  },
+  required: ['id', 'title'],
+  additionalProperties: false,
+} as const;
+
 const revisionSchema = {
   type: 'object',
   properties: { revision: { type: 'number' } },
@@ -139,6 +219,16 @@ export const Kanban = Rpc.define({
     setPinned: { input: setPinnedInput, output: revisionSchema },
     clearManual: { input: sessionKeyInput, output: revisionSchema },
     prune: { input: pruneInput, output: revisionSchema },
+    'rules.upsert': { input: ruleInput, output: revisionSchema },
+    'rules.remove': { input: idInput, output: revisionSchema },
+    'rules.reorder': { input: idsInput, output: revisionSchema },
+    'rules.preview': { input: emptyInput, output: previewSchema },
+    'settings.update': { input: settingsInput, output: revisionSchema },
+    'columns.upsert': { input: columnInput, output: revisionSchema },
+    'columns.remove': { input: idInput, output: revisionSchema },
+    'columns.reorder': { input: idsInput, output: revisionSchema },
+    'columns.default': { input: idInput, output: revisionSchema },
+    'board.replace': { input: documentInput, output: revisionSchema },
   },
   events: {
     changed: {
@@ -149,5 +239,6 @@ export const Kanban = Rpc.define({
         additionalProperties: false,
       },
     },
+    notify: { schema: notifySchema },
   },
 });

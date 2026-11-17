@@ -64,10 +64,14 @@ Load the checkout as above, then check the surfaces:
    shrinks to an icon when the title needs the room.
 7. **Launcher and dialog.** The side region's **+** menu and New tab view list **Session board**. From
    Home the command opens the quick board in a dialog.
-8. **States.** With no matches the board explains the filters; while the server is unreachable it
+8. **Rules.** **Settings › Session kanban** edits columns and rules. A rule moves cards on a
+   trigger, a card a person placed or pinned stays put unless the rule overrides it, and **Dry run**
+   lists the moves without applying them. Rule notifications show a toast, or a system notification
+   when the window is unfocused.
+9. **States.** With no matches the board explains the filters; while the server is unreachable it
    keeps the last snapshot behind an offline banner and recovers without a reload.
-9. **Narrow window.** At about 700 px the filters wrap and the columns scroll sideways without the
-   page overflowing. On narrow screens the board is the panel's `mobile` view.
+10. **Narrow window.** At about 700 px the filters wrap and the columns scroll sideways without the
+    page overflowing. On narrow screens the board is the panel's `mobile` view.
 
 ## License
 

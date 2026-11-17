@@ -161,6 +161,7 @@ export function Board(props: {
     const states = selectCards(factsOf(rows), {
       ...activityOf(current),
       showSubagents: document.settings.showSubagents,
+      includeArchived: document.settings.archived === 'column',
     });
     const byID = new Map(rows.map((row) => [row.id, row]));
 
@@ -197,15 +198,35 @@ export function Board(props: {
     const all = cards();
     const visible = filtered();
     const compare = comparePlacements(document);
+    const archived = document.settings.archived === 'column';
 
-    return document.columns.map((column) => {
+    const views = document.columns.map((column) => {
       const order = all
-        .filter((card) => card.columnId === column.id)
+        .filter((card) => card.columnId === column.id && !(archived && card.archived))
         .sort(compare)
         .map((card) => card.key);
-      const list = visible.filter((card) => card.columnId === column.id).sort(compare);
+      const list = visible
+        .filter((card) => card.columnId === column.id && !(archived && card.archived))
+        .sort(compare);
       return { column, order, cards: groupForks(list) };
     });
+
+    if (archived) {
+      const column: Column = {
+        id: 'archived',
+        title: ctx.t('board.archivedColumn'),
+        order: Number.MAX_SAFE_INTEGER,
+        color: null,
+        collapsed: false,
+      };
+      views.push({
+        column,
+        order: [],
+        cards: groupForks(visible.filter((card) => card.archived)),
+      });
+    }
+
+    return views;
   });
 
   function indexFor(columnId: string, beforeKey?: string, excludeKey?: string): number {
@@ -518,6 +539,7 @@ export function Board(props: {
                     'sk-column--over': dragging() !== undefined && overColumn() === entry.column.id,
                   }}
                   onDragOver={(event) => {
+                    if (entry.column.id === 'archived') return;
                     event.preventDefault();
                     setOverColumn(entry.column.id);
                     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
@@ -525,7 +547,10 @@ export function Board(props: {
                   onDragLeave={() => {
                     if (overColumn() === entry.column.id) setOverColumn(undefined);
                   }}
-                  onDrop={(event) => dropOnColumn(event, entry.column.id)}
+                  onDrop={(event) => {
+                    if (entry.column.id === 'archived') return;
+                    dropOnColumn(event, entry.column.id);
+                  }}
                 >
                   <header class="sk-column__head">
                     <span>{entry.column.title}</span>

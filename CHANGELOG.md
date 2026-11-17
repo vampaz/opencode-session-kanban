@@ -39,3 +39,28 @@
   and an optional starter prompt.
 - Placements of deleted sessions and archived families are pruned on read.
 - RPC: `move` now takes a column index, plus `setPinned`, `clearManual`, and `prune`.
+
+### Rules, M3
+
+- A pure rules engine: the closed trigger and condition sets, `all`/`any` matching, ascending
+  priority with one match per session and event, manual and pinned guards with `overrideManual`,
+  per-rule cooldown, and event-id dedupe recorded in `lastRuleEventID`.
+- The server engine follows the event stream and a shared 30 s idle tick (one per process),
+  re-checks the live document under the board lock, and emits `changed` plus rule notifications.
+- RPC: `rules.upsert`, `rules.remove`, `rules.reorder`, `rules.preview`, `settings.update`,
+  `columns.upsert`, `columns.remove`, `columns.reorder`, `columns.default`, and `board.replace`.
+- Rule notifications: a toast, and a system notification with the rule event id when the window is
+  unfocused.
+- The `kanban` settings page: board defaults, column editor (add, rename, recolour, reorder,
+  collapse, delete), rule list with an inline editor and dry run, export, import, and reset.
+- A `created` rule is evaluated just after the window's initial placement, so it can move a new
+  session instead of racing it; the initial placement is `source: "auto"`.
+
+### Engine fixes
+
+- Rules only apply to sessions that render as cards: roots and forks, and subagents only while
+  `showSubagents` is on, using the board's own classification.
+- The idle tick makes one listing request instead of a `session.get` per session, and builds each
+  subject from the listed row.
+- One engine and one idle tick run per process, elected through `globalThis` with takeover when the
+  owner unloads or the plugin reloads; the event-id dedupe stays as the safety net.
