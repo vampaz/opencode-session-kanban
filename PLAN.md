@@ -76,10 +76,10 @@ server's own data.
 
 | Surface | Purpose | Notes |
 | --- | --- | --- |
-| Side panel `kanban:board` | The board | `region: "side"`, wide, numeric `width`, pinned in every session, `mobile` view |
+| Side panel `kanban:board` | The board | `region: "side"`, `wide`, numeric `width`, `PanelTab.pinned`, `mobile` view |
 | Command `kanban.open` | Toggle the board on the routed session | default bind `mod+shift+b`, also a `/kanban` slash command |
 | `session.panel` menu item | Launcher row in the side region's **+** menu | `primary` only if the board should be the default tab |
-| Dialog "Quick board" | Board from Home, a draft, or any screen | `x-large`, same component as the panel |
+| Dialog "Quick board" | Board from Home, a draft, or any screen | `<ctx.ui.Dialog size="x-large">` (980×600), same component as the panel |
 | `session.header` slot | `running · waiting` chip that opens the board | compact form when the title does not fit |
 | Settings page `kanban` | Columns, rules, defaults, reset | searchable `entries`; keeps rule editing out of the panel |
 
@@ -113,7 +113,7 @@ src/
 
 - Registers the RPC contract and the `kanban` tool namespace.
 - Owns the board document in `ctx.storage`, guarded by `revision`.
-- Runs the rules engine over `ctx.event.subscribe({ types: [...] })`.
+- Runs the rules engine over the `AsyncIterable` from `ctx.event.subscribe({ types: [...] })`.
 - Emits `changed` after every mutation, and `notify` intents for rule actions that need a window.
 
 ### RPC contract
@@ -205,6 +205,8 @@ Notes:
   ever appears, split placements into `placement/<sessionKey>` keys; do not do that up front.
 - `version` exists so a future schema change can migrate on load. Unknown versions load read-only and
   show a "newer board" error instead of overwriting.
+- Plugin storage takes `Schema.Json`. Keep `BoardDocument` a type alias, not an interface, so the
+  document assigns to it without a cast.
 
 ## Derived card state
 
@@ -213,7 +215,7 @@ Never persisted. Computed by `core/status.ts` from the window's synced data.
 | Card state | Source |
 | --- | --- |
 | waiting | `data.session.permission.sessions()` or `data.session.form.sessions()` contains the id |
-| running | `data.session.status(id) === "running"`, or `data.session.active()` |
+| running | `data.session.status(id) === "running"` (status is only `idle` or `running`), or `data.session.active().includes(id)` |
 | failed | `Session.Info.outcome === "failed"` |
 | interrupted | `Session.Info.outcome === "interrupted"` |
 | idle | none of the above |
@@ -223,7 +225,7 @@ Never persisted. Computed by `core/status.ts` from the window's synced data.
 
 Bootstrap on first open:
 
-1. `session.list({ parentID: "null", archived: false, limit: 200 })` through `ctx.client`.
+1. `session.list({ parentID: null, archived: false, limit: 200 })` through `ctx.client`.
 2. `data.session.remember(info)` for each result.
 3. Subscribe to server events; never poll.
 
@@ -268,8 +270,8 @@ The fork keeps its own column until its root disappears; it never becomes a root
 
 ### Sync
 
-- `session.created`, `session.deleted`, `session.archived`, `session.renamed`, `session.status`,
-  `session.execution.*`, `permission.*`, `form.*` keep the board current.
+- `session.created`, `session.deleted`, `session.archived`, `session.unarchived`, `session.renamed`,
+  `session.status`, `session.execution.*`, `permission.*`, `form.*` keep the board current.
 - A deleted session removes its placement; an archived one hides or moves to an Archived column per
   settings. A fork follows its root: an archived root hides the family, and a deleted root removes
   the fork's placement too.
@@ -311,7 +313,8 @@ Semantics:
 - `cooldownMs` bounds repeat firings per session (for example a flapping retry loop).
 - **Dry run** (`rules.preview`) lists what would move now and applies nothing.
 - `notify` emits an RPC `notify` event; the first window to handle the id shows a toast and, when the
-  window is unfocused, a system notification through `ctx.attention.notify({ id })`.
+  window is unfocused, a system notification through `ctx.attention.notify({ title, session, id })`
+  (`title` is required; `id` dedupes across windows).
 
 Deferred: `prompt` as a rule action. It costs tokens and can loop; it needs a cooldown, a per-session
 cap, and the `kanban.prompt` permission.
