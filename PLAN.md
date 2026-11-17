@@ -123,9 +123,10 @@ Methods:
 | Method | Input | Output |
 | --- | --- | --- |
 | `snapshot` | — | `{ version, revision, columns, placements[], rules[], settings }` |
-| `move` | `{ sessionKey, columnId, position, source }` | `{ revision }` |
+| `move` | `{ sessionKey, columnId, index, source }` | `{ revision }` |
 | `setPinned` | `{ sessionKey, pinned }` | `{ revision }` |
 | `clearManual` | `{ sessionKey }` | `{ revision }` |
+| `prune` | `{ keys }` | `{ revision }` |
 | `columns.upsert` / `columns.remove` / `columns.reorder` | column patch | `{ revision }` |
 | `rules.upsert` / `rules.remove` / `rules.reorder` | rule patch | `{ revision }` |
 | `rules.preview` | — | `{ moves: { sessionKey, from, to, ruleID }[] }` |
@@ -135,8 +136,16 @@ Methods:
 
 Events: `changed` `{ revision }`, `notify` `{ id, title, message, variant, sessionKey }`.
 
-Every method returns the new `revision`. A write reads the document, applies the change, and writes
-only if `revision` is unchanged; otherwise it retries. Duplicate writes are therefore harmless when
+`move` takes the index among the target column's cards; the server reads its own document, computes
+the fractional position, and rebalances only when the gap collapses. `prune` takes the session keys a
+window knows are gone, because the server cannot enumerate sessions.
+
+`createSession` and `forkSession` are listed for the agent tools in M4. In M2 the window creates and
+forks through the client and places the result with `move`, because the window owns the synced
+session store that `remember` feeds.
+
+Every method returns the new `revision`. Writes are serialized by one in-process lock shared through
+`globalThis`, so two locations cannot lose an update; a revision read-back stays as a second check. Duplicate writes are therefore harmless when
 more than one plugin instance is loaded.
 
 Event subscriptions are live only. A window that reconnects must re-request `snapshot`; drive that
@@ -229,9 +238,10 @@ Bootstrap on first open:
 2. `data.session.remember(info)` for each result.
 3. Subscribe to server events; never poll.
 
-A child session is a subagent only when `parentID` is set and `fork` is absent. Subagents are hidden
-unless `settings.showSubagents` is on, in which case they render nested under their root card. A fork
-always renders as its own card while its root is visible.
+A child session is a subagent only when `parentID` is set and `fork` is absent. A fork is marked by
+`fork` and names its source in `fork.sessionID`; it has no `parentID`. Subagents are hidden unless
+`settings.showSubagents` is on, in which case they render nested under their root card. A fork always
+renders as its own card while its root is visible.
 
 A fork's visibility follows its root: resolve `parentID` to the root session and apply that session's
 archived state to the whole family. A deleted root removes the fork's placement on the next sweep.

@@ -91,9 +91,35 @@ const moveInput = {
   properties: {
     sessionKey: { type: 'string' },
     columnId: { type: 'string' },
-    position: { type: 'number' },
+    // The index among the target column's cards. The server reads its own document, so a caller
+    // never needs to compute a fractional position from a snapshot it may have already lost.
+    index: { type: 'number' },
   },
-  required: ['sessionKey', 'columnId', 'position'],
+  required: ['sessionKey', 'columnId', 'index'],
+  additionalProperties: false,
+} as const;
+
+const sessionKeyInput = {
+  type: 'object',
+  properties: { sessionKey: { type: 'string' } },
+  required: ['sessionKey'],
+  additionalProperties: false,
+} as const;
+
+const setPinnedInput = {
+  type: 'object',
+  properties: {
+    sessionKey: { type: 'string' },
+    pinned: { type: 'boolean' },
+  },
+  required: ['sessionKey', 'pinned'],
+  additionalProperties: false,
+} as const;
+
+const pruneInput = {
+  type: 'object',
+  properties: { keys: { type: 'array', items: { type: 'string' } } },
+  required: ['keys'],
   additionalProperties: false,
 } as const;
 
@@ -110,6 +136,9 @@ export const Kanban = Rpc.define({
   methods: {
     snapshot: { input: emptyInput, output: snapshotSchema },
     move: { input: moveInput, output: revisionSchema },
+    setPinned: { input: setPinnedInput, output: revisionSchema },
+    clearManual: { input: sessionKeyInput, output: revisionSchema },
+    prune: { input: pruneInput, output: revisionSchema },
   },
   events: {
     changed: {

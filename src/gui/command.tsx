@@ -2,12 +2,7 @@ import { Command } from '@opencode/plugin/gui';
 
 import type { UiContext } from './client';
 import { openQuickBoard } from './dialog';
-
-const TAB_ID = 'board';
-
-export function boardKey(ctx: UiContext): string {
-  return `${ctx.id}:${TAB_ID}`;
-}
+import { boardKey } from './key';
 
 /** Shows the board on the routed session, or the quick board from Home. Never hides it. */
 export function openBoard(ctx: UiContext): void {

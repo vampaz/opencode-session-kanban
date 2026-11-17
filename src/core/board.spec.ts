@@ -2,14 +2,23 @@ import type { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOARD_LOCK_KEY,
   BOARD_VERSION,
   DEFAULT_COLUMNS,
+  REBALANCE_STEP,
+  clearPlacement,
+  columnOrder,
   commitBoard,
   defaultBoard,
+  dropPlacement,
   movePlacement,
   parseBoard,
+  pinPlacement,
   positionBetween,
+  prunePlacements,
   readBoard,
+  rebalanceColumn,
+  removeColumn,
   type BoardDocument,
   type BoardStorage,
   type Placement,
@@ -267,3 +276,260 @@ function boardWith(placement: Partial<Placement> & { columnId: string }): BoardD
     },
   };
 }
+
+describe('commitBoard under concurrency', () => {
+  it('serializes writers so no update is lost', async () => {
+    const inner = createStorage();
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const slow: BoardStorage = {
+      async get(key) {
+        await tick();
+        return inner.storage.get(key);
+      },
+      async set(key, value) {
+        await tick();
+        await inner.storage.set(key, value);
+      },
+    };
+
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        commitBoard(slow, (board) =>
+          movePlacement(board, {
+            sessionKey: `sidecar\nses_${index}`,
+            columnId: 'in-progress',
+            position: index,
+            updatedAt: index,
+          }),
+        ),
+      ),
+    );
+
+    const stored = await readBoard(inner.storage);
+    expect(Object.keys(stored.placements)).toHaveLength(10);
+    expect(stored.revision).toBe(10);
+  });
+
+  it('publishes its lock on globalThis under a registered symbol', async () => {
+    await commitBoard(createStorage().storage, (board) => board);
+
+    expect(BOARD_LOCK_KEY).toBe(Symbol.for('opencode-session-kanban.board-lock'));
+    expect((globalThis as unknown as Record<symbol, unknown>)[BOARD_LOCK_KEY]).toBeDefined();
+  });
+});
+
+describe('dropPlacement', () => {
+  function boardWithCards(...positions: number[]): BoardDocument {
+    const placements: Record<string, Placement> = {};
+    positions.forEach((position, index) => {
+      placements[`sidecar\nses_${index}`] = { ...placementAt(position), columnId: 'done' };
+    });
+    return { ...defaultBoard(), placements };
+  }
+
+  it('writes the midpoint between the neighbours', () => {
+    const board = boardWithCards(0, 10);
+    const result = dropPlacement(board, {
+      sessionKey: 'sidecar\nnew',
+      columnId: 'done',
+      index: 1,
+      updatedAt: 1,
+    });
+
+    expect(result.rebalanced).toBe(false);
+    expect(result.board.placements['sidecar\nnew']?.position).toBe(5);
+    expect(columnOrder(result.board, 'done').map((card) => card.key)).toEqual([
+      'sidecar\nses_0',
+      'sidecar\nnew',
+      'sidecar\nses_1',
+    ]);
+  });
+
+  it('places at either end and clamps the index', () => {
+    const board = boardWithCards(0, 10);
+
+    const first = dropPlacement(board, {
+      sessionKey: 'sidecar\nfirst',
+      columnId: 'done',
+      index: -4,
+      updatedAt: 1,
+    });
+    expect(first.board.placements['sidecar\nfirst']?.position).toBe(-1);
+
+    const last = dropPlacement(board, {
+      sessionKey: 'sidecar\nlast',
+      columnId: 'done',
+      index: 99,
+      updatedAt: 1,
+    });
+    expect(last.board.placements['sidecar\nlast']?.position).toBe(11);
+  });
+
+  it('keeps the moved card out of its own neighbour list', () => {
+    const board = boardWithCards(0, 10, 20);
+    const result = dropPlacement(board, {
+      sessionKey: 'sidecar\nses_0',
+      columnId: 'done',
+      index: 2,
+      updatedAt: 1,
+    });
+
+    expect(columnOrder(result.board, 'done').map((card) => card.key)).toEqual([
+      'sidecar\nses_1',
+      'sidecar\nses_2',
+      'sidecar\nses_0',
+    ]);
+  });
+
+  it('rebalances when the gap collapses, then places the card', () => {
+    const board = boardWithCards(0, 1e-9, 2e-9);
+    const result = dropPlacement(board, {
+      sessionKey: 'sidecar\nnew',
+      columnId: 'done',
+      index: 1,
+      updatedAt: 1,
+    });
+
+    expect(result.rebalanced).toBe(true);
+    expect(
+      columnOrder(result.board, 'done')
+        .filter((card) => card.key !== 'sidecar\nnew')
+        .map((card) => card.position),
+    ).toEqual([0, REBALANCE_STEP, REBALANCE_STEP * 2]);
+    expect(result.board.placements['sidecar\nnew']?.position).toBe(REBALANCE_STEP / 2);
+  });
+});
+
+describe('rebalanceColumn', () => {
+  it('spaces the column evenly and leaves other columns alone', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: {
+        'sidecar\na': { ...placementAt(0.1), columnId: 'done' },
+        'sidecar\nb': { ...placementAt(0.2), columnId: 'done' },
+        'sidecar\nc': { ...placementAt(7), columnId: 'failed' },
+      },
+    };
+
+    const rebalanced = rebalanceColumn(board, 'done');
+    expect(rebalanced.placements['sidecar\na']?.position).toBe(0);
+    expect(rebalanced.placements['sidecar\nb']?.position).toBe(REBALANCE_STEP);
+    expect(rebalanced.placements['sidecar\nc']?.position).toBe(7);
+  });
+
+  it('returns the same document when the column is already spaced', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: { 'sidecar\na': { ...placementAt(0), columnId: 'done' } },
+    };
+
+    expect(rebalanceColumn(board, 'done')).toBe(board);
+    expect(rebalanceColumn(defaultBoard(), 'done')).toEqual(defaultBoard());
+  });
+});
+
+describe('pinPlacement', () => {
+  it('pins an existing placement without moving it', () => {
+    const board = boardWith({ columnId: 'done', position: 5 });
+    const pinned = pinPlacement(board, 'sidecar\nses_1', true, 9);
+
+    expect(pinned.placements['sidecar\nses_1']).toMatchObject({
+      columnId: 'done',
+      position: 5,
+      pinned: true,
+      updatedAt: 9,
+    });
+  });
+
+  it('creates a placement in the default column for an unplaced session', () => {
+    const board = defaultBoard();
+    const pinned = pinPlacement(board, 'sidecar\nses_1', true, 3);
+
+    expect(pinned.placements['sidecar\nses_1']).toMatchObject({
+      columnId: 'backlog',
+      pinned: true,
+      source: 'manual',
+    });
+  });
+
+  it('does nothing when unpinning an unplaced session', () => {
+    const board = defaultBoard();
+
+    expect(pinPlacement(board, 'sidecar\nses_1', false, 2)).toBe(board);
+  });
+
+  it('returns the same document when the pin already matches', () => {
+    const board = boardWith({ columnId: 'done', pinned: true });
+
+    expect(pinPlacement(board, 'sidecar\nses_1', true, 9)).toBe(board);
+    expect(pinPlacement(board, 'sidecar\nmissing', true, 9)).not.toBe(board);
+  });
+});
+
+describe('clearPlacement', () => {
+  it('removes the placement and nothing else', () => {
+    const board = boardWith({ columnId: 'done' });
+    const cleared = clearPlacement(board, 'sidecar\nses_1');
+
+    expect(cleared.placements).toEqual({});
+    expect(clearPlacement(cleared, 'sidecar\nses_1')).toBe(cleared);
+  });
+});
+
+describe('removeColumn', () => {
+  it('moves its cards to the default column in order', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: {
+        'sidecar\na': { ...placementAt(1), columnId: 'done' },
+        'sidecar\nb': { ...placementAt(2), columnId: 'done' },
+        'sidecar\nc': { ...placementAt(0), columnId: 'backlog' },
+      },
+    };
+
+    const removed = removeColumn(board, 'done');
+    expect(removed.columns.some((column) => column.id === 'done')).toBe(false);
+    expect(columnOrder(removed, 'backlog').map((card) => card.key)).toEqual([
+      'sidecar\nc',
+      'sidecar\na',
+      'sidecar\nb',
+    ]);
+  });
+
+  it('adopts a new default column and never removes the last one', () => {
+    const board: BoardDocument = { ...defaultBoard(), defaultColumn: 'done' };
+    const removed = removeColumn(board, 'done');
+
+    expect(removed.defaultColumn).toBe('backlog');
+    expect(removed.columns).toHaveLength(DEFAULT_COLUMNS.length - 1);
+
+    const single: BoardDocument = { ...defaultBoard(), columns: [DEFAULT_COLUMNS[0]!] };
+    expect(removeColumn(single, 'backlog')).toBe(single);
+  });
+
+  it('ignores an unknown column', () => {
+    const board = defaultBoard();
+    expect(removeColumn(board, 'nope')).toBe(board);
+  });
+});
+
+describe('prunePlacements', () => {
+  it('removes only the placements the caller reports', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: {
+        'sidecar\ngone': { ...placementAt(0), columnId: 'done' },
+        'sidecar\nkept': { ...placementAt(1), columnId: 'done' },
+      },
+    };
+
+    const result = prunePlacements(board, (key) => key.endsWith('gone'));
+    expect(result.keys).toEqual(['sidecar\ngone']);
+    expect(Object.keys(result.board.placements)).toEqual(['sidecar\nkept']);
+  });
+
+  it('returns the same document when nothing is prunable', () => {
+    const board = defaultBoard();
+    expect(prunePlacements(board, () => false)).toEqual({ board, keys: [] });
+  });
+});

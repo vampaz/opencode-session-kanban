@@ -30,8 +30,20 @@ export type SelectOptions = {
 };
 
 export function cardKind(session: SessionFacts): CardKind {
-  if (!session.parentID) return 'root';
-  return session.fork !== undefined && session.fork !== null ? 'fork' : 'subagent';
+  // The server marks a fork with `fork`; it carries no `parentID`, so the flag decides.
+  if (session.fork !== undefined && session.fork !== null) return 'fork';
+  return session.parentID ? 'subagent' : 'root';
+}
+
+/** The session a fork copied, from `fork.sessionID`. Subagents use `parentID` instead. */
+function parentOf(session: SessionFacts): string | undefined {
+  const fork = session.fork;
+  if (typeof fork === 'object' && fork !== null) {
+    const source = (fork as { readonly sessionID?: unknown }).sessionID;
+    if (typeof source === 'string') return source;
+  }
+
+  return session.parentID;
 }
 
 /**
@@ -48,14 +60,47 @@ export function rootID(
   while (current) {
     if (seen.has(current.id)) return undefined;
     seen.add(current.id);
-    if (!current.parentID) return current.id;
 
-    const parent = sessions.get(current.parentID);
+    const parentID = parentOf(current);
+    if (!parentID) return current.id;
+
+    const parent = sessions.get(parentID);
     if (!parent) return undefined;
     current = parent;
   }
 
   return undefined;
+}
+
+/**
+ * Whether a placement's session is known to be gone. Only positive evidence counts: the session or
+ * an ancestor on its chain is missing, or the resolved root is archived. An ancestor the window has
+ * not loaded yet is unknown, not gone, so the placement is kept.
+ */
+export function placementGone(
+  sessions: ReadonlyMap<string, SessionFacts>,
+  missing: (sessionID: string) => boolean,
+  sessionID: string,
+): boolean {
+  if (missing(sessionID)) return true;
+
+  const seen = new Set<string>();
+  let current = sessions.get(sessionID);
+
+  while (current) {
+    if (seen.has(current.id)) return false;
+    seen.add(current.id);
+
+    const parentID = parentOf(current);
+    if (!parentID) return current.archived === true;
+    if (missing(parentID)) return true;
+
+    const parent = sessions.get(parentID);
+    if (!parent) return false;
+    current = parent;
+  }
+
+  return false;
 }
 
 /** Archived is a property of the family: an archived root takes its forks and subagents with it. */
@@ -155,5 +200,6 @@ export function groupForks<
 export function projectLabel(directory: string, subpath?: string): string {
   const parts = directory.replace(/[\\/]+$/, '').split(/[\\/]/);
   const base = parts[parts.length - 1] || directory;
-  return subpath ? `${base}/${subpath}` : base;
+  // A subpath outside the project root (e.g. a scratch directory) reads as `../..`.
+  return subpath && !subpath.startsWith('..') ? `${base}/${subpath}` : base;
 }

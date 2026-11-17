@@ -51,17 +51,22 @@ Load the checkout as above, then check the surfaces:
 1. **Board.** Open a session and press `Cmd+Shift+B`, or run `Open session board` from the command
    palette or `/kanban`. The pinned **Session board** tab opens in the side region and lists the
    sessions of every project.
-2. **Cards.** Each card shows its title, project and subpath, status, last activity, agent, model, and
-   run cost when the window has them. A fork carries a fork marker and sits under its root.
-3. **Filters.** Filter by text, project, and status, or switch on **Running or waiting only**. View
+2. **Moving.** Drag a card onto another column, or onto a card to reorder it. Every card also has a
+   **Move to…** menu, which is the keyboard and touch path; a failed write puts the card back.
+3. **Cards.** Each card shows its title, project and subpath, status, last activity, agent, model, and
+   run cost when the window has them. A fork carries a fork marker and sits under its root. Its menu
+   opens, moves, forks, pins, archives, and copies the session ID.
+4. **New session.** The **+** on a column header opens a small form: a project directory (the panel's
+   project by default), an optional title, and an optional starter prompt.
+5. **Filters.** Filter by text, project, and status, or switch on **Running or waiting only**. View
    preferences belong to the window, not the server, and one button clears them.
-4. **Header chip.** The session header shows the `running · waiting` counts and opens the board. It
+6. **Header chip.** The session header shows the `running · waiting` counts and opens the board. It
    shrinks to an icon when the title needs the room.
-5. **Launcher and dialog.** The side region's **+** menu and New tab view list **Session board**. From
+7. **Launcher and dialog.** The side region's **+** menu and New tab view list **Session board**. From
    Home the command opens the quick board in a dialog.
-6. **States.** With no matches the board explains the filters; while the server is unreachable it
+8. **States.** With no matches the board explains the filters; while the server is unreachable it
    keeps the last snapshot behind an offline banner and recovers without a reload.
-7. **Narrow window.** At about 700 px the filters wrap and the columns scroll sideways without the
+9. **Narrow window.** At about 700 px the filters wrap and the columns scroll sideways without the
    page overflowing. On narrow screens the board is the panel's `mobile` view.
 
 ## License

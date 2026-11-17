@@ -113,6 +113,17 @@ export const boardStyles = `
   font-variant-numeric: tabular-nums;
 }
 
+.sk-column__tools {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.sk-column--over {
+  border-color: var(--border-selected, var(--border-base, currentColor));
+  background: color-mix(in srgb, var(--text-base, currentColor) 9%, transparent);
+}
+
 .sk-column__empty {
   margin: 0;
   color: var(--text-weaker, var(--text-weak, inherit));
@@ -127,6 +138,15 @@ export const boardStyles = `
   border: 1px solid var(--border-base, currentColor);
   border-radius: 8px;
   background: var(--surface-raised-base, var(--surface-base, transparent));
+  cursor: grab;
+}
+
+.sk-card:active {
+  cursor: grabbing;
+}
+
+.sk-card--dragging {
+  opacity: 0.45;
 }
 
 .sk-card--fork {
@@ -151,6 +171,18 @@ export const boardStyles = `
   flex: 0 0 auto;
   margin-top: 2px;
   color: var(--text-weaker, var(--text-weak, inherit));
+}
+
+.sk-card__pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-weaker, var(--text-weak, inherit));
+}
+
+.sk-card__menu {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
 }
 
 .sk-card__meta {
@@ -202,6 +234,24 @@ export const boardStyles = `
 
 @media (prefers-reduced-motion: reduce) {
   .sk-status--running .sk-status__dot { animation: none; }
+}
+
+.sk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sk-form__row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.sk-form__row > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .sk-sr-only {
