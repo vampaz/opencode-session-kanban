@@ -79,18 +79,23 @@ export const boardStyles = `
   flex: 1;
   gap: 8px;
   align-items: flex-start;
+  /* Center the strip when a few capped columns leave free space; the safe keyword keeps the
+     first column reachable while the strip overflows and scrolls. */
+  justify-content: safe center;
   min-height: 0;
   padding: 8px;
   overflow: auto;
 }
 
+/* Columns share the width equally and stop growing at 360px, so cards stay readable. Below a
+   200px minimum each the strip overflows and scrolls instead. */
 .sk-column {
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 1 200px;
   flex-direction: column;
   gap: 6px;
-  width: 200px;
-  min-width: 160px;
+  min-width: 200px;
+  max-width: 360px;
   max-height: 100%;
   padding: 8px;
   overflow-y: auto;
