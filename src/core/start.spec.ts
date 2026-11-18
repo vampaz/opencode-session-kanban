@@ -5,8 +5,10 @@ import {
   DEFAULT_START_PROMPT,
   decideCreate,
   decideStart,
+  startColumn,
   startMessage,
   startsAgent,
+  ticketText,
   type StartFacts,
 } from './start';
 
@@ -111,5 +113,47 @@ describe('decideCreate', () => {
     expect(decideCreate(column(), '')).toEqual({ send: false, queue: false });
     expect(decideCreate(column(), '   ')).toEqual({ send: false, queue: false });
     expect(decideCreate(column(), undefined)).toEqual({ send: false, queue: false });
+    expect(decideCreate(column(), '', true)).toEqual({ send: false, queue: false });
+  });
+
+  it('follows the user choice over the column', () => {
+    expect(decideCreate(column({ startAgent: false }), 'Do it.', true)).toEqual({
+      send: true,
+      queue: false,
+    });
+    expect(decideCreate(column(), 'Do it.', false)).toEqual({ send: false, queue: true });
+  });
+});
+
+describe('ticketText', () => {
+  it('joins the title and the task', () => {
+    expect(ticketText(' Fix login ', ' The button does nothing. ')).toBe(
+      'Fix login\n\nThe button does nothing.',
+    );
+  });
+
+  it('uses whichever part is present', () => {
+    expect(ticketText('Fix login', '  ')).toBe('Fix login');
+    expect(ticketText(undefined, 'Do it.')).toBe('Do it.');
+    expect(ticketText('', null)).toBe('');
+  });
+});
+
+describe('startColumn', () => {
+  const backlog = column({ id: 'backlog', title: 'Backlog', order: 0, startAgent: false });
+  const review = column({ id: 'review', title: 'Review', order: 3, startAgent: true });
+  const progress = column({ order: 1 });
+
+  it('keeps a chosen column that starts agents', () => {
+    expect(startColumn([backlog, progress, review], review)).toBe(review);
+  });
+
+  it('picks the first starting column by order', () => {
+    expect(startColumn([review, backlog, progress], backlog)).toBe(progress);
+  });
+
+  it('keeps the chosen column when none starts agents', () => {
+    const done = column({ id: 'done', title: 'Done', order: 2, startAgent: false });
+    expect(startColumn([backlog, done], backlog)).toBe(backlog);
   });
 });

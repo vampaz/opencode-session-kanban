@@ -55,8 +55,37 @@ export function decideStart(facts: StartFacts): StartDecision {
 /** What a New session task does in its column: run now, wait on the placement, or neither. */
 export type CreateDecision = { readonly send: boolean; readonly queue: boolean };
 
-export function decideCreate(column: Column, task: string | null | undefined): CreateDecision {
+/**
+ * `start` is the user's choice; omitted, the column decides. Without a task there is nothing to
+ * send or queue.
+ */
+export function decideCreate(
+  column: Column,
+  task: string | null | undefined,
+  start: boolean = startsAgent(column),
+): CreateDecision {
   const text = task?.trim();
   if (!text) return { send: false, queue: false };
-  return startsAgent(column) ? { send: true, queue: false } : { send: false, queue: true };
+  return start ? { send: true, queue: false } : { send: false, queue: true };
+}
+
+/** The message a new ticket gives the agent: its title and its task, so a title alone is enough. */
+export function ticketText(
+  title: string | null | undefined,
+  task: string | null | undefined,
+): string {
+  const heading = title?.trim() ?? '';
+  const body = task?.trim() ?? '';
+  if (heading && body) return `${heading}\n\n${body}`;
+  return heading || body;
+}
+
+/**
+ * Where a ticket goes once its agent starts: the chosen column when it starts agents, otherwise the
+ * first column that does, otherwise the chosen column.
+ */
+export function startColumn(columns: readonly Column[], chosen: Column): Column {
+  if (startsAgent(chosen)) return chosen;
+  const ordered = [...columns].sort((left, right) => left.order - right.order);
+  return ordered.find((column) => startsAgent(column)) ?? chosen;
 }

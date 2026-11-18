@@ -268,6 +268,39 @@ export const boardStyles = `
   min-width: 0;
 }
 
+.sk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sk-field__label {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--text-base, inherit);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.sk-field__optional,
+.sk-field__hint {
+  color: var(--text-weak, inherit);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.sk-field__hint {
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.sk-field__control {
+  width: 100%;
+}
+
 .sk-form__row {
   display: flex;
   gap: 8px;
@@ -390,6 +423,13 @@ export const boardStyles = `
   border: 1px solid var(--border-base, currentColor);
   border-radius: 8px;
   resize: vertical;
+}
+
+.sk-textarea--task {
+  min-height: 140px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .sk-rule__group {

@@ -23,9 +23,11 @@ Status: **v1 (0.1.0)**. The GUI plugin API is experimental; the package pins Ope
 - **Moving**: native drag and drop with an optimistic mirror, and a **Move to…** menu on every card
   for the keyboard and touch.
 - **Card actions**: Open, Move to…, Fork…, Pin, Archive, Copy session ID.
-- **New session**: from any column, with the panel project as the default directory, an optional
-  title, and an optional **Task**. The task runs at once in a column that starts the agent, or waits
-  on the card for a later move.
+- **New session**: from any column, with a project picker (the panel project by default, or any
+  folder), an optional title, and an optional multi-line **Task**. **Create** keeps the card in the
+  column with its title and task queued. **Create and start** (`Cmd+Enter`) sends the title and task
+  to the new session's agent and moves the card to the first starting column. The board stays in
+  view; the toast opens the session.
 - **Two-way board**: each root and fork session gets a short board instruction in its model
   requests, so the agent moves its own card when its state changes (`source: agent`). Moving a card
   into a starting column starts the session: a queued task first, else the column's start message,
@@ -78,8 +80,9 @@ Desktop loads GUI plugins from the global configuration, so use the global file 
 - **Header chip**: click the `running · waiting` chip to open the board.
 - **Settings**: **Settings › Session kanban** for columns, rules, defaults, export/import, reset,
   and the one-time **Sort sessions by state**.
-- **New session**: the **+** on a column header. A task runs immediately in a starting column
-  (default: In progress) and waits on the card elsewhere.
+- **New session**: the **+** on a column header. **Create** keeps the card in that column with its
+  title and task queued. **Create and start** (`Cmd+Enter`, or `Ctrl+Enter`) runs the agent on the
+  title and task, then moves the card to the first starting column (default: In progress).
 - **Start a session**: move its card into a starting column. The first move sends the queued task,
   or the column's start message for a session that has run before. A card that never ran and has no
   task is only placed.
@@ -171,9 +174,11 @@ directory for throwaway sessions.
    the keyboard. A failed write puts the card back.
 3. **Actions**: Open focuses the session tab; Fork… adds a marked card beside its source; Archive
    hides the card; Copy session ID copies it.
-4. **New session**: the column **+** creates a session in its project and opens it. A task in
+4. **New session**: the column **+** opens the form with the column in its title. **Create** in
    Backlog shows **Task queued** and does not run; moving that card to In progress runs it, shows
-   the start toast, and clears the task.
+   the start toast, and clears the task. **Create and start** in Backlog runs the agent on the title
+   and task and moves the card to In progress. Both keep the board in view and toast an **Open**
+   action.
 5. **Rules**: a `created` rule places a new session; a manually placed (or pinned) card is skipped
    unless the rule overrides it; dry run lists moves without applying them; a rule notification shows
    a toast, or a system notification when the window is unfocused.

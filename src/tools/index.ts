@@ -279,9 +279,11 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
           const result = await ops.createInColumn(parsed.value);
           const suffix = result.started
             ? ' The task is running.'
-            : result.queued
-              ? ' The task waits on the card until a starting column.'
-              : '';
+            : !result.queued
+              ? ''
+              : startsAgent(result.column)
+                ? ' The agent did not start; the task waits on the card.'
+                : ' The task waits on the card until a starting column.';
           return `Created ${result.session.id} in ${result.column.title} (${result.column.id}).${suffix}`;
         });
       },

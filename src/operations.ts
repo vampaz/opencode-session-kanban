@@ -27,7 +27,13 @@ import { performArchive } from './core/archive';
 import { filterCardRows, type CardRow } from './core/cards';
 import { previewRules, type PreviewMove, type Rule } from './core/rules';
 import { planSort, type SortPlan } from './core/sort';
-import { decideCreate, decideStart, startsAgent, type StartDecision } from './core/start';
+import {
+  decideCreate,
+  decideStart,
+  startColumn,
+  startsAgent,
+  type StartDecision,
+} from './core/start';
 import { selectCards, type CardStatus, type SessionFacts } from './core/status';
 import { subjectFor } from './engine';
 
@@ -398,18 +404,21 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       readonly title?: string | undefined;
       readonly prompt?: string | undefined;
       readonly column: string;
+      /** Start the agent now. Omitted, the column decides. */
+      readonly start?: boolean | undefined;
     }) => {
       const current = await readBoard(ctx.storage);
       const column = resolveColumn(current, input.column);
       const task = input.prompt?.trim() ?? '';
-      const decision = decideCreate(column, task);
+      const decision = decideCreate(column, task, input.start);
 
       const session = await ctx.session.create({
         location: { directory: input.directory },
         ...(input.title?.trim() ? { title: input.title.trim() } : {}),
       });
 
-      const board = await commit((document) => {
+      // The task is queued before a start too, so a prompt that fails leaves it on the card.
+      let board = await commit((document) => {
         const next = dropPlacement(document, {
           sessionKey: sessionKey(session.id),
           columnId: column.id,
@@ -418,15 +427,34 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
           updatedAt: Date.now(),
         }).board;
 
-        // A task in a column that does not start the agent waits on the card.
-        return decision.queue ? setTask(next, sessionKey(session.id), task) : next;
+        return task ? setTask(next, sessionKey(session.id), task) : next;
       });
 
-      if (decision.send) {
-        await ctx.session.prompt({ sessionID: session.id, text: task });
+      if (!decision.send) {
+        return { board, column, session, started: false, queued: decision.queue };
       }
 
-      return { board, column, session, started: decision.send, queued: decision.queue };
+      const started = await sendStart(session.id, { kind: 'task', text: task });
+      if (!started) return { board, column, session, started: false, queued: true };
+
+      // The card follows the agent: once the task is accepted, it moves to a starting column.
+      const target = startColumn(board.columns, column);
+      if (target.id !== column.id) {
+        board = await commit(
+          (document) =>
+            dropPlacement(document, {
+              sessionKey: sessionKey(session.id),
+              columnId: target.id,
+              index: columnOrder(document, target.id).length,
+              source: 'auto',
+              updatedAt: Date.now(),
+            }).board,
+        );
+      } else {
+        board = await readBoard(ctx.storage);
+      }
+
+      return { board, column: target, session, started: true, queued: false };
     },
 
     /** The one-time sort's preview: unplaced cards by state, and the counts per column. */

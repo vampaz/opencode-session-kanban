@@ -406,7 +406,8 @@ export function Board(props: {
 
   function addToColumn(column: Column): void {
     openNewSession(ctx, {
-      columnId: column.id,
+      column,
+      columns: board()?.columns ?? [],
       directory: props.directory?.() ?? routedSession(ctx)?.directory,
     });
   }

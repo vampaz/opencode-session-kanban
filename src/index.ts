@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Plugin } from '@opencode/plugin';
 
 import { appendInstruction, boardInstruction, hasInstruction } from './core/instruction';
+import { ticketText } from './core/start';
 import { rulesApplyTo } from './core/status';
 import { startEngine, type NotifyPayload } from './engine';
 import { createOperations } from './operations';
@@ -61,11 +62,14 @@ export default Plugin.define({
         const directory = stringField(value, 'directory', 'The session needs a directory.');
         const column = stringField(value, 'columnId', 'The session needs a column.');
         const title = optionalString(value.title);
-        const task = optionalString(value.task);
+        // A board ticket gives the agent its title and its task, so a title alone can start it.
+        const task = ticketText(title, optionalString(value.task));
+        const start = typeof value.start === 'boolean' ? value.start : undefined;
 
         const result = await ops.createInColumn({
           directory,
           column,
+          start,
           ...(title ? { title } : {}),
           ...(task ? { prompt: task } : {}),
         });
@@ -73,6 +77,7 @@ export default Plugin.define({
         return {
           sessionID: result.session.id,
           revision: result.board.revision,
+          columnId: result.column.id,
           started: result.started,
           queued: result.queued,
         };

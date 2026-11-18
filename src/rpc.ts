@@ -236,6 +236,8 @@ const createInput = {
     columnId: { type: 'string' },
     title: { type: 'string' },
     task: { type: 'string' },
+    // Start the agent now. Omitted, the column decides.
+    start: { type: 'boolean' },
   },
   required: ['directory', 'columnId'],
   additionalProperties: false,
@@ -246,10 +248,12 @@ const createOutputSchema = {
   properties: {
     sessionID: { type: 'string' },
     revision: { type: 'number' },
+    // The column the card ended in: a started ticket moves to a starting column.
+    columnId: { type: 'string' },
     started: { type: 'boolean' },
     queued: { type: 'boolean' },
   },
-  required: ['sessionID', 'revision', 'started', 'queued'],
+  required: ['sessionID', 'revision', 'columnId', 'started', 'queued'],
   additionalProperties: false,
 } as const;
 
