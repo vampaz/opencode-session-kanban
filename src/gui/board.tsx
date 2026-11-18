@@ -1,9 +1,16 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { SessionRef, UiMenuEntry } from '@opencode/plugin/gui';
 
-import { type BoardDocument, type Column, dropPlacement, prunePlacements } from '../core/board';
+import {
+  ARCHIVED_COLUMN,
+  type BoardDocument,
+  type Column,
+  dropPlacement,
+  prunePlacements,
+} from '../core/board';
 import { selectBootstrapSessions } from '../core/bootstrap';
 import { filterCards, isFiltering } from '../core/filter';
+import { SESSION_LIST_LIMIT, sessionKeyOf } from '../core/session-ref';
 import { groupForks, projectLabel, selectCards, type CardStatus } from '../core/status';
 import { SessionCard, type CardActions, type CardView } from './card';
 import { kanbanClient, type UiContext } from './client';
@@ -90,7 +97,7 @@ export function Board(props: {
       const roots = await current.client.session.list({
         parentID: null,
         archived: false,
-        limit: 200,
+        limit: SESSION_LIST_LIMIT,
       });
       for (const info of roots.data) current.data.session.remember(info);
 
@@ -98,7 +105,7 @@ export function Board(props: {
       for (let page = 0; page < FORK_PAGES; page += 1) {
         const response = await current.client.session.list({
           archived: false,
-          limit: 200,
+          limit: SESSION_LIST_LIMIT,
           ...(cursor ? { cursor } : {}),
         });
         const known = new Set(current.data.session.list().map((info) => info.id));
@@ -167,7 +174,7 @@ export function Board(props: {
 
     return states.map((state) => {
       const row = byID.get(state.id);
-      const key = `${current.id}\n${state.id}`;
+      const key = sessionKeyOf(state.id);
       const placement = document.placements[key];
       const columnId =
         placement && document.columns.some((column) => column.id === placement.columnId)
@@ -218,7 +225,7 @@ export function Board(props: {
 
     if (archived) {
       const column: Column = {
-        id: 'archived',
+        id: ARCHIVED_COLUMN,
         title: ctx.t('board.archivedColumn'),
         order: Number.MAX_SAFE_INTEGER,
         color: null,
@@ -281,6 +288,8 @@ export function Board(props: {
       }
     } catch (cause) {
       setBoard(previous);
+      // Re-read so a concurrent server change is not clobbered by the local revert.
+      await refresh();
       fail('move.failed', cause);
     }
   }
@@ -313,7 +322,8 @@ export function Board(props: {
     const sessionKey = dragKey(event);
     setDragging(undefined);
     setOverColumn(undefined);
-    if (!sessionKey || sessionKey === card.key) return;
+    // The archived column is virtual: it has no server-side column to move a card to.
+    if (!sessionKey || sessionKey === card.key || card.columnId === ARCHIVED_COLUMN) return;
     void moveCard(sessionKey, card.columnId, indexFor(card.columnId, card.key, sessionKey));
   }
 
@@ -554,7 +564,7 @@ export function Board(props: {
                     'sk-column--over': dragging() !== undefined && overColumn() === entry.column.id,
                   }}
                   onDragOver={(event) => {
-                    if (entry.column.id === 'archived') return;
+                    if (entry.column.id === ARCHIVED_COLUMN) return;
                     event.preventDefault();
                     setOverColumn(entry.column.id);
                     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
@@ -563,7 +573,7 @@ export function Board(props: {
                     if (overColumn() === entry.column.id) setOverColumn(undefined);
                   }}
                   onDrop={(event) => {
-                    if (entry.column.id === 'archived') return;
+                    if (entry.column.id === ARCHIVED_COLUMN) return;
                     dropOnColumn(event, entry.column.id);
                   }}
                 >

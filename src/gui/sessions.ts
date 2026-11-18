@@ -1,5 +1,6 @@
 import type { ServerRef } from '@opencode/plugin/gui';
 
+import { SESSION_SERVER, sessionIDOfKey } from '../core/session-ref';
 import { placementGone, selectCards, type SessionFacts } from '../core/status';
 import type { UiContext } from './client';
 
@@ -19,7 +20,7 @@ export type SessionRow = {
 };
 
 export function serverOf(ctx: UiContext): ServerRef | undefined {
-  return ctx.servers.get('sidecar');
+  return ctx.servers.get(SESSION_SERVER);
 }
 
 export function rowsOf(server: ServerRef | undefined): readonly SessionRow[] {
@@ -65,12 +66,6 @@ export function countsOf(
   };
 }
 
-/** The session id part of a `SessionRef.key` (`<server id>\n<session id>`). */
-export function sessionIDOf(sessionKey: string): string {
-  const index = sessionKey.indexOf('\n');
-  return index === -1 ? sessionKey : sessionKey.slice(index + 1);
-}
-
 /**
  * Whether a placement's session is known to be gone. The decision is pure; this wrapper supplies
  * the window's `missing` set, which marks sessions the server reported as deleted.
@@ -80,5 +75,5 @@ export function isGone(
   facts: ReadonlyMap<string, SessionFacts>,
   sessionKey: string,
 ): boolean {
-  return placementGone(facts, (id) => server.data.session.missing(id), sessionIDOf(sessionKey));
+  return placementGone(facts, (id) => server.data.session.missing(id), sessionIDOfKey(sessionKey));
 }

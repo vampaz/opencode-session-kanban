@@ -1,9 +1,10 @@
+import { SESSION_SERVER, sessionIDOfKey } from '../core/session-ref';
 import { kanbanClient, type UiContext } from './client';
-import { sessionIDOf } from './sessions';
+import { createSeenTracker } from './dedupe';
 
 /** Shows rule notifications from the server: a toast, and a system notification when unfocused. */
 export function addNotifications(ctx: UiContext): () => void {
-  const seen = new Set<string>();
+  const seen = createSeenTracker();
 
   return kanbanClient(ctx).events.on('notify', (event) => {
     const data = event.data as {
@@ -26,14 +27,14 @@ export function addNotifications(ctx: UiContext): () => void {
 
     if (!document.hasFocus()) {
       const sessionID =
-        typeof data.sessionKey === 'string' ? sessionIDOf(data.sessionKey) : undefined;
+        typeof data.sessionKey === 'string' ? sessionIDOfKey(data.sessionKey) : undefined;
 
       void ctx.attention.notify({
         id,
         title,
         ...(message ? { message } : {}),
         variant,
-        ...(sessionID ? { session: { server: 'sidecar', id: sessionID } } : {}),
+        ...(sessionID ? { session: { server: SESSION_SERVER, id: sessionID } } : {}),
       });
     }
   });
