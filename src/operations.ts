@@ -25,7 +25,9 @@ import {
 } from './core/board';
 import { performArchive } from './core/archive';
 import { filterCardRows, type CardRow } from './core/cards';
+import { beginBoardCreate, endBoardCreate, markBoardCreate } from './core/pending-create';
 import { previewRules, type PreviewMove, type Rule } from './core/rules';
+import { SESSION_LIST_LIMIT, sessionIDOfKey, sessionKeyOf } from './core/session-ref';
 import { planSort, type SortPlan } from './core/sort';
 import {
   decideCreate,
@@ -34,7 +36,7 @@ import {
   startsAgent,
   type StartDecision,
 } from './core/start';
-import { selectCards, type CardStatus, type SessionFacts } from './core/status';
+import { cardStatus, selectCards, type CardStatus, type SessionFacts } from './core/status';
 import { subjectFor } from './engine';
 
 export type SessionInfo = Awaited<ReturnType<Plugin.Context['session']['get']>>;
@@ -63,23 +65,12 @@ export type CardDetail = {
   readonly visible: boolean;
 };
 
-const SESSION_SERVER = 'sidecar';
-
 /** Every shared server operation: the RPC handlers and the agent tools both call these. */
 export function createOperations(ctx: Plugin.Context, changed: Changed) {
-  function sessionKey(sessionID: string): string {
-    return `${SESSION_SERVER}\n${sessionID}`;
-  }
-
   async function commit(mutate: BoardMutation): Promise<BoardDocument> {
     const board = await commitBoard(ctx.storage, mutate);
     await changed(board.revision);
     return board;
-  }
-
-  function sessionIDOfKey(key: string): string {
-    const index = key.indexOf('\n');
-    return index === -1 ? key : key.slice(index + 1);
   }
 
   async function sendStart(sessionID: string, decision: StartDecision): Promise<boolean> {
@@ -89,7 +80,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       await ctx.session.prompt({ sessionID, text: decision.text });
       // The task is cleared only after it was sent, so a failed prompt keeps it queued.
       if (decision.kind === 'task') {
-        await commit((document) => setTask(document, sessionKey(sessionID), null));
+        await commit((document) => setTask(document, sessionKeyOf(sessionID), null));
       }
       return true;
     } catch (cause) {
@@ -115,7 +106,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       plan: planSort(
         board,
         states.map((state) => {
-          const key = sessionKey(state.id);
+          const key = sessionKeyOf(state.id);
           return {
             sessionKey: key,
             status: state.status,
@@ -172,19 +163,23 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
   }
 
   async function listSessions(): Promise<SessionInfo[]> {
-    const response = await ctx.session.list({ limit: 200 });
+    const response = await ctx.session.list({ limit: SESSION_LIST_LIMIT });
     return response.data;
   }
 
-  function factsOf(sessions: readonly SessionInfo[]): SessionFacts[] {
-    return sessions.map((session) => ({
+  function factOf(session: SessionInfo): SessionFacts {
+    return {
       id: session.id,
       parentID: session.parentID,
       fork: session.fork,
       archived: session.time.archived !== undefined,
       outcome: session.outcome,
       updated: session.time.updated,
-    }));
+    };
+  }
+
+  function factsOf(sessions: readonly SessionInfo[]): SessionFacts[] {
+    return sessions.map(factOf);
   }
 
   function cardRows(
@@ -207,7 +202,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       const session = byID.get(state.id);
       if (!session) return [];
 
-      const placement = board.placements[sessionKey(state.id)];
+      const placement = board.placements[sessionKeyOf(state.id)];
       const columnID =
         placement && board.columns.some((column) => column.id === placement.columnId)
           ? placement.columnId
@@ -243,8 +238,8 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
         (columnOrderIndex.get(left.columnId) ?? 0) - (columnOrderIndex.get(right.columnId) ?? 0);
       if (column !== 0) return column;
 
-      const leftPlacement = board.placements[sessionKey(left.sessionID)];
-      const rightPlacement = board.placements[sessionKey(right.sessionID)];
+      const leftPlacement = board.placements[sessionKeyOf(left.sessionID)];
+      const rightPlacement = board.placements[sessionKeyOf(right.sessionID)];
       const leftPosition =
         leftPlacement?.columnId === left.columnId
           ? leftPlacement.position
@@ -269,7 +264,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
 
     describeColumns: async (): Promise<string> => describeColumns(await readBoard(ctx.storage)),
 
-    sessionKey,
+    sessionKey: sessionKeyOf,
 
     requireSession,
 
@@ -340,7 +335,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       const board = await commit(
         (document) =>
           dropPlacement(document, {
-            sessionKey: sessionKey(sessionID),
+            sessionKey: sessionKeyOf(sessionID),
             columnId: column.id,
             index,
             source,
@@ -394,7 +389,7 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       if (!archived) return { board: await readBoard(ctx.storage) };
 
       const board = await commit(
-        (document) => prunePlacements(document, (key) => key === sessionKey(sessionID)).board,
+        (document) => prunePlacements(document, (key) => key === sessionKeyOf(sessionID)).board,
       );
       return { board };
     },
@@ -412,49 +407,60 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       const task = input.prompt?.trim() ?? '';
       const decision = decideCreate(column, task, input.start);
 
-      const session = await ctx.session.create({
-        location: { directory: input.directory },
-        ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-      });
+      // The created event can be handled before the mark exists (the event and the create response
+      // are independent), so the in-flight count covers that ordering and the mark covers later ones.
+      beginBoardCreate();
+      try {
+        const session = await ctx.session.create({
+          location: { directory: input.directory },
+          ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+        });
 
-      // The task is queued before a start too, so a prompt that fails leaves it on the card.
-      let board = await commit((document) => {
-        const next = dropPlacement(document, {
-          sessionKey: sessionKey(session.id),
-          columnId: column.id,
-          index: columnOrder(document, column.id).length,
-          source: 'auto',
-          updatedAt: Date.now(),
-        }).board;
+        // The created event arrives before this placement commits, so mark the session and let the
+        // engine's created handler wait for the placement instead of racing it.
+        markBoardCreate(session.id);
 
-        return task ? setTask(next, sessionKey(session.id), task) : next;
-      });
+        // The task is queued before a start too, so a prompt that fails leaves it on the card.
+        let board = await commit((document) => {
+          const next = dropPlacement(document, {
+            sessionKey: sessionKeyOf(session.id),
+            columnId: column.id,
+            index: columnOrder(document, column.id).length,
+            source: 'auto',
+            updatedAt: Date.now(),
+          }).board;
 
-      if (!decision.send) {
-        return { board, column, session, started: false, queued: decision.queue };
+          return task ? setTask(next, sessionKeyOf(session.id), task) : next;
+        });
+
+        if (!decision.send) {
+          return { board, column, session, started: false, queued: decision.queue };
+        }
+
+        const started = await sendStart(session.id, { kind: 'task', text: task });
+        if (!started) return { board, column, session, started: false, queued: true };
+
+        // The card follows the agent: once the task is accepted, it moves to a starting column.
+        const target = startColumn(board.columns, column);
+        if (target.id !== column.id) {
+          board = await commit(
+            (document) =>
+              dropPlacement(document, {
+                sessionKey: sessionKeyOf(session.id),
+                columnId: target.id,
+                index: columnOrder(document, target.id).length,
+                source: 'auto',
+                updatedAt: Date.now(),
+              }).board,
+          );
+        } else {
+          board = await readBoard(ctx.storage);
+        }
+
+        return { board, column: target, session, started: true, queued: false };
+      } finally {
+        endBoardCreate();
       }
-
-      const started = await sendStart(session.id, { kind: 'task', text: task });
-      if (!started) return { board, column, session, started: false, queued: true };
-
-      // The card follows the agent: once the task is accepted, it moves to a starting column.
-      const target = startColumn(board.columns, column);
-      if (target.id !== column.id) {
-        board = await commit(
-          (document) =>
-            dropPlacement(document, {
-              sessionKey: sessionKey(session.id),
-              columnId: target.id,
-              index: columnOrder(document, target.id).length,
-              source: 'auto',
-              updatedAt: Date.now(),
-            }).board,
-        );
-      } else {
-        board = await readBoard(ctx.storage);
-      }
-
-      return { board, column: target, session, started: true, queued: false };
     },
 
     /** The one-time sort's preview: unplaced cards by state, and the counts per column. */
@@ -502,13 +508,16 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       const session = await requireSession(sessionID);
       const board = await readBoard(ctx.storage);
       const subject = await subjectFor(ctx, session);
-      const placement = board.placements[sessionKey(sessionID)];
+      const placement = board.placements[sessionKeyOf(sessionID)];
       const columnID =
         placement && board.columns.some((column) => column.id === placement.columnId)
           ? placement.columnId
           : board.defaultColumn;
       const column = board.columns.find((candidate) => candidate.id === columnID);
       const activity = sharedActivity();
+      // The server has a pending-request query the event stream does not cover, so a permission the
+      // tracker missed still reads as waiting. `cardStatus` keeps waiting over running, matching the
+      // list and the GUI, which derive status from `selectCards`.
       const pending = await ctx.permission
         .list({ sessionID })
         .then((requests) => requests.length > 0)
@@ -525,15 +534,11 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
           projectID: session.projectID,
           columnId: columnID,
           columnTitle: column?.title ?? columnID,
-          status: activity.isRunning(sessionID)
-            ? 'running'
-            : activity.isWaiting(sessionID) || pending
-              ? 'waiting'
-              : session.outcome === 'failed'
-                ? 'failed'
-                : session.outcome === 'interrupted'
-                  ? 'interrupted'
-                  : 'idle',
+          status: cardStatus({
+            session: factOf(session),
+            running: activity.isRunning(sessionID),
+            waiting: activity.isWaiting(sessionID) || pending,
+          }),
           archived: subject.archived,
           pinned: placement?.pinned ?? false,
           source: placement?.source ?? 'auto',

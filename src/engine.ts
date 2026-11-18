@@ -1,6 +1,6 @@
 import type { Plugin } from '@opencode/plugin';
 
-import { commitBoard, readBoard, type BoardDocument } from './core/board';
+import { commitBoard, readBoard, type BoardDocument, type BoardStorage } from './core/board';
 import { sharedActivity } from './activity';
 import {
   eventIDOf,
@@ -10,19 +10,12 @@ import {
   type RuleEventLike,
 } from './core/events';
 import { electEngine } from './core/leader';
+import { boardCreatesInFlight, consumeBoardCreate } from './core/pending-create';
 import { applyRule, type RuleOutcome, type RuleSubject, type RuleTrigger } from './core/rules';
 import { applyRunSync, runStateOfEvent, type RunState } from './core/run-sync';
+import { SESSION_LIST_LIMIT, sessionKeyOf } from './core/session-ref';
 import { rulesApplyTo } from './core/status';
 import { IDLE_TICK_MS, subscribeIdleTick } from './core/tick';
-
-/** The only server the board serves in v1: the desktop's built-in one. */
-const SESSION_SERVER = 'sidecar';
-
-/**
- * A `created` event is evaluated just after the window's own initial placement, so a created rule
- * sees that placement (and can move the card) instead of racing it.
- */
-const CREATED_SETTLE_MS = 150;
 
 const EVENT_TYPES = [
   'session.created',
@@ -114,21 +107,54 @@ async function runEvents(
 /**
  * One list call covers roots, forks, and subagents. Subagents are skipped unless they are shown,
  * and a subject comes straight from the row, so the tick makes no `session.get` per session.
+ *
+ * Every matching subject is evaluated in one write: the outcomes accumulate into one document, so
+ * a tick that moves several cards bumps the revision once and emits one `changed`.
  */
-async function runIdleTick(ctx: Plugin.Context, ports: EnginePorts): Promise<void> {
+export async function runIdleTick(ctx: Plugin.Context, ports: EnginePorts): Promise<void> {
   const board = await readBoard(ctx.storage);
   const wantsIdle = board.rules.some((rule) => rule.enabled && rule.trigger.includes('idle.for'));
   if (!wantsIdle) return;
 
-  const response = await ctx.session.list({ archived: false, limit: 200 });
+  const response = await ctx.session.list({ archived: false, limit: SESSION_LIST_LIMIT });
   const byID = new Map(response.data.map((info) => [info.id, info]));
   const bucket = Math.floor(Date.now() / IDLE_TICK_MS);
+  const applied: { outcome: RuleOutcome; eventID: string; sessionKey: string }[] = [];
+  let wrote = false;
 
-  for (const info of response.data) {
-    if (!rulesApplyTo(info, { showSubagents: board.settings.showSubagents })) continue;
+  const next = await commitBoard(ctx.storage, (document) => {
+    // A revision conflict re-runs this mutate, so each attempt collects only its own outcomes.
+    applied.length = 0;
+    wrote = false;
 
-    const subject = subjectFrom(info, familyArchivedIn(info, byID));
-    await applySubject(ctx, ports, 'idle.for', undefined, `idle.${bucket}.${info.id}`, subject);
+    const now = Date.now();
+    let working = document;
+
+    for (const info of response.data) {
+      if (!rulesApplyTo(info, { showSubagents: document.settings.showSubagents })) continue;
+
+      const subject = subjectFrom(info, familyArchivedIn(info, byID));
+      const eventID = `idle.${bucket}.${info.id}`;
+      const outcome = applyRule(working, subject, { trigger: 'idle.for', eventID, now });
+      if (!outcome) continue;
+
+      applied.push({ outcome, eventID, sessionKey: subject.sessionKey });
+      if (outcome.changed) wrote = true;
+      working = outcome.board;
+    }
+
+    return working;
+  });
+
+  if (wrote) await ports.changed(next.revision);
+
+  for (const { outcome, eventID, sessionKey } of applied) {
+    if (
+      outcome.notify ||
+      (outcome.changed && outcome.to !== undefined && next.settings.notifyOnRuleMove)
+    ) {
+      await ports.notify(notifyFor(outcome, next, eventID, sessionKey));
+    }
   }
 }
 
@@ -141,8 +167,11 @@ async function handleEvent(
   sessionID: string,
 ): Promise<void> {
   try {
-    if (trigger === 'created') {
-      await new Promise((resolve) => setTimeout(resolve, CREATED_SETTLE_MS));
+    // A board create marks its session, so this event waits for that create's placement instead of
+    // racing it. The mark can be missing when the event is handled before the create response, so a
+    // create in flight also waits. A session created elsewhere has neither and is handled at once.
+    if (trigger === 'created' && (consumeBoardCreate(sessionID) || boardCreatesInFlight() > 0)) {
+      await waitForPlacement(ctx.storage, sessionKeyOf(sessionID));
     }
 
     const info = await ctx.session.get({ sessionID });
@@ -153,6 +182,30 @@ async function handleEvent(
     await applySubject(ctx, ports, trigger, state, eventID, subject);
   } catch (cause) {
     console.error('[kanban] rule handling failed', { trigger, sessionID, cause });
+  }
+}
+
+export type WaitForPlacementOptions = {
+  /** The longest wait. Two seconds outlasts any local board create. */
+  readonly capMs?: number;
+  readonly stepMs?: number;
+};
+
+/** Polls the board until the created card's placement lands, or the cap elapses. */
+export async function waitForPlacement(
+  storage: BoardStorage,
+  sessionKey: string,
+  options: WaitForPlacementOptions = {},
+): Promise<boolean> {
+  const capMs = options.capMs ?? 2000;
+  const stepMs = options.stepMs ?? 25;
+  const deadline = Date.now() + capMs;
+
+  for (;;) {
+    const board = await readBoard(storage);
+    if (board.placements[sessionKey]) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
   }
 }
 
@@ -204,7 +257,7 @@ export async function subjectFor(ctx: Plugin.Context, info: SessionInfo): Promis
 
 function subjectFrom(info: SessionInfo, archived: boolean): RuleSubject {
   return {
-    sessionKey: `${SESSION_SERVER}\n${info.id}`,
+    sessionKey: sessionKeyOf(info.id),
     directory: info.location.directory,
     projectID: info.projectID,
     title: info.title ?? '',
@@ -222,11 +275,18 @@ function parentOfInfo(info: SessionInfo): string | undefined {
   return source?.sessionID ?? info.parentID;
 }
 
+/**
+ * The ancestor walk stops at this depth. Chains are normally 0-1 deep (a fork of a root, or a
+ * subagent of a root), so the loop costs no `session.get` in the common case and stays bounded
+ * for a malformed or very deep family.
+ */
+const MAX_ANCESTOR_DEPTH = 10;
+
 async function familyArchived(ctx: Plugin.Context, info: SessionInfo): Promise<boolean> {
   let current = info;
   const seen = new Set<string>();
 
-  for (let depth = 0; depth < 10; depth += 1) {
+  for (let depth = 0; depth < MAX_ANCESTOR_DEPTH; depth += 1) {
     if (current.time.archived !== undefined) return true;
 
     const parentID = parentOfInfo(current);
@@ -249,7 +309,7 @@ function familyArchivedIn(info: SessionInfo, sessions: ReadonlyMap<string, Sessi
   let current: SessionInfo | undefined = info;
   const seen = new Set<string>();
 
-  for (let depth = 0; depth < 10 && current; depth += 1) {
+  for (let depth = 0; depth < MAX_ANCESTOR_DEPTH && current; depth += 1) {
     if (current.time.archived !== undefined) return true;
 
     const parentID = parentOfInfo(current);

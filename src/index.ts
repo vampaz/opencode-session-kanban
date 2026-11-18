@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Plugin } from '@opencode/plugin';
 
+import type { BoardDocument } from './core/board';
 import { appendInstruction, boardInstruction, hasInstruction } from './core/instruction';
 import { ticketText } from './core/start';
 import { rulesApplyTo } from './core/status';
@@ -40,7 +41,17 @@ export default Plugin.define({
     console.log('[kanban] server part ready', { instanceId, pid, directory, setupAt });
 
     let emitChanged: (revision: number) => Promise<void> = async () => undefined;
-    const ops = createOperations(ctx, (revision) => emitChanged(revision));
+
+    /**
+     * One publish for both writers: an operation commit and the engine. It drops the cached board
+     * and tells the window, so the next hook read is fresh again.
+     */
+    function publish(revision: number): Promise<void> {
+      boardCacheHolder().board = undefined;
+      return emitChanged(revision);
+    }
+
+    const ops = createOperations(ctx, publish);
 
     const rpc = await ctx.rpc.register(Kanban, {
       snapshot: () => ops.snapshot(),
@@ -169,7 +180,7 @@ export default Plugin.define({
     });
 
     const stopEngine = startEngine(ctx, {
-      changed: (revision) => rpc.events.emit('changed', { revision }),
+      changed: publish,
       notify: (payload: NotifyPayload) => rpc.events.emit('notify', payload),
     });
 
@@ -178,7 +189,16 @@ export default Plugin.define({
     const instructionHook = await ctx.session.hook('context', async (event) => {
       if (hasInstruction(event.system)) return;
 
-      const board = await ops.board();
+      // The instruction hook runs on every model request of a card session, so it reads the stored
+      // board once per revision instead of once per request. The cache is process-wide: every
+      // instance's publish (and the elected engine's) drops it, so another location's write cannot
+      // leave this hook serving a stale column.
+      const cache = boardCacheHolder();
+      let board = cache.board;
+      if (!board) {
+        board = await ops.board();
+        cache.board = board;
+      }
       if (!board.settings.agentUpdatesCard) return;
 
       const info = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined);
@@ -200,6 +220,20 @@ export default Plugin.define({
     };
   },
 });
+
+/**
+ * The cached board for the instruction hook, shared across every location instance in this process
+ * (`Symbol.for`, like the board lock), because all instances read and write the same stored
+ * document and every write goes through some instance's `publish`.
+ */
+const BOARD_CACHE_KEY = Symbol.for('opencode-session-kanban.board-cache');
+
+type BoardCache = { board: BoardDocument | undefined };
+
+function boardCacheHolder(): BoardCache {
+  const holder = globalThis as unknown as Record<symbol, BoardCache | undefined>;
+  return (holder[BOARD_CACHE_KEY] ??= { board: undefined });
+}
 
 function field(input: unknown, key: string): unknown {
   if (typeof input !== 'object' || input === null) throw new Error(`Invalid ${key} input.`);
