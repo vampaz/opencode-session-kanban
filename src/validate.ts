@@ -162,6 +162,9 @@ export function parseSettings(value: unknown): Partial<BoardSettings> {
   if (item.agentUpdatesCard !== undefined) {
     patch.agentUpdatesCard = bool(item.agentUpdatesCard, 'agentUpdatesCard');
   }
+  if (item.followRuns !== undefined) {
+    patch.followRuns = bool(item.followRuns, 'followRuns');
+  }
 
   return patch as Partial<BoardSettings>;
 }

@@ -67,7 +67,8 @@ describe('DEFAULT_COLUMNS', () => {
     expect(DEFAULT_COLUMNS.map((column) => column.title)).toEqual([
       'Backlog',
       'In progress',
-      'Waiting',
+      'In review',
+      'Ready to deploy',
       'Done',
       'Failed',
     ]);
@@ -75,7 +76,7 @@ describe('DEFAULT_COLUMNS', () => {
 
   it('uses unique ids and a stable order', () => {
     expect(new Set(DEFAULT_COLUMNS.map((column) => column.id)).size).toBe(DEFAULT_COLUMNS.length);
-    expect(DEFAULT_COLUMNS.map((column) => column.order)).toEqual([0, 1, 2, 3, 4]);
+    expect(DEFAULT_COLUMNS.map((column) => column.order)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });
 
@@ -255,6 +256,25 @@ describe('readBoard', () => {
     expect(board.placements['sidecar\nses_1']?.task).toBeNull();
     expect(board.placements['sidecar\nses_1']?.source).toBe('agent');
     expect(board.settings.agentUpdatesCard).toBe(true);
+  });
+
+  it('adds Ready to deploy before Done on a board written without it', async () => {
+    const modern = defaultBoard();
+    const legacy = {
+      ...modern,
+      columns: modern.columns.filter((column) => column.id !== 'ready'),
+    };
+
+    const board = await readBoard(createStorage(legacy).storage);
+    expect(board.columns.map((column) => column.id)).toEqual([
+      'backlog',
+      'in-progress',
+      'waiting',
+      'ready',
+      'done',
+      'failed',
+    ]);
+    expect(board.settings.followRuns).toBe(true);
   });
 
   it('refuses a malformed placement', () => {

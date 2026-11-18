@@ -33,9 +33,16 @@ Status: **v1 (0.1.0)**. The GUI plugin API is experimental; the package pins Ope
   into a starting column starts the session: a queued task first, else the column's start message,
   else "Continue with this task." for a session that has run. Agent, rule, and tool moves never
   start anything.
+- **Cards follow their runs**, on by default: the server moves a board card on its own run events, so
+  a forgotten agent report cannot leave the board stale. A run that starts moves the card to In
+  progress, a question for you moves it to In review (and back to In progress once you answer), a
+  failure or interruption moves it to Failed, and a run that finishes while the card is still in a
+  working column moves it to **Ready to deploy**. Only the
+  agent or you move a card to **Done**, which means deployed. Cards you moved by hand or pinned
+  stay put.
 - **Sort sessions by state** in settings: a preview with counts per column, then one confirmed write
-  that places unplaced cards (running → In progress, waiting → Waiting, finished → Done, failed →
-  Failed). Placed and pinned cards stay put.
+  that places unplaced cards (running → In progress, waiting → In review, finished → Ready to
+  deploy, failed → Failed). Placed and pinned cards stay put.
 - **Rules**: triggers on status, run outcome, waiting, creation, and idle time; conditions on
   directory, project, title, agent, root, cost, and idle minutes; actions `move`, `pin`, and
   `notify`. Rules run in priority order, skip manually placed cards unless they override them, never
@@ -87,8 +94,10 @@ Desktop loads GUI plugins from the global configuration, so use the global file 
   or the column's start message for a session that has run before. A card that never ran and has no
   task is only placed.
 - **Agent self-reporting**: on by default. Each model request of a card session is told its column and
-  the state mapping, so the agent can move its own card. Turn it off under **Agents update their
-  card**.
+  the state mapping, so the agent can move its own card to **Ready to deploy** when the work is done
+  and to **Done** once it is deployed. Turn it off under **Agents update their card**.
+- **Follow runs**: the built-in run sync above. Turn it off under **Cards follow their runs** when you
+  want to place every card by hand.
 - **Rules**: a rule moves, pins, or notifies; it never archives or prompts. Dry run lists what would
   move now.
 

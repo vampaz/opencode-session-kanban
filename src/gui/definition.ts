@@ -90,6 +90,9 @@ export const definition = Plugin.define({
       'settings.notifyOnRuleMove': 'Notify when a rule moves a card',
       'settings.notifyOnRuleMoveHint': 'A system notification, or an in-app toast when focused.',
       'settings.agentUpdatesCard': 'Agents update their card',
+      'settings.followRuns': 'Cards follow their runs',
+      'settings.followRunsHint':
+        'A run moves its card: started → In progress, waiting for you → In review, finished → Ready to deploy, failed or interrupted → Failed. Cards you moved by hand or pinned stay put.',
       'settings.agentUpdatesCardHint':
         'Each model request gets a short reminder of the card and its column, so the agent can move itself.',
       'settings.columns': 'Columns',
@@ -129,7 +132,7 @@ export const definition = Plugin.define({
       'settings.reset': 'Reset board',
       'settings.sort': 'Sort sessions by state',
       'settings.sortHint':
-        'Places unplaced cards by state: running → In progress, waiting → Waiting, finished → Done, failed → Failed. Placed and pinned cards stay.',
+        'Places unplaced cards by state: running → In progress, waiting → In review, finished → Ready to deploy, failed → Failed. Placed and pinned cards stay.',
       'settings.sortAction': 'Sort sessions',
       'settings.sortTitle': 'Sort sessions by state?',
       'settings.sortDescription': '{{count}} sessions would move. {{counts}}',

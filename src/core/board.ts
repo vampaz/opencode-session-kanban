@@ -11,6 +11,9 @@ const BOARD_KEY = 'board';
 /** A write retries when another instance replaced the document first. */
 const MAX_WRITE_ATTEMPTS = 5;
 
+/** The column a finished run lands in, before the deploy. Done means deployed. */
+export const READY_COLUMN = 'ready';
+
 /** The settled default set. Written to a fresh document and editable afterwards. */
 export const DEFAULT_COLUMNS: readonly Column[] = [
   { id: 'backlog', title: 'Backlog', order: 0, color: null, startAgent: false, startPrompt: null },
@@ -22,9 +25,24 @@ export const DEFAULT_COLUMNS: readonly Column[] = [
     startAgent: true,
     startPrompt: null,
   },
-  { id: 'waiting', title: 'Waiting', order: 2, color: null, startAgent: false, startPrompt: null },
-  { id: 'done', title: 'Done', order: 3, color: null, startAgent: false, startPrompt: null },
-  { id: 'failed', title: 'Failed', order: 4, color: null, startAgent: false, startPrompt: null },
+  {
+    id: 'waiting',
+    title: 'In review',
+    order: 2,
+    color: null,
+    startAgent: false,
+    startPrompt: null,
+  },
+  {
+    id: READY_COLUMN,
+    title: 'Ready to deploy',
+    order: 3,
+    color: null,
+    startAgent: false,
+    startPrompt: null,
+  },
+  { id: 'done', title: 'Done', order: 4, color: null, startAgent: false, startPrompt: null },
+  { id: 'failed', title: 'Failed', order: 5, color: null, startAgent: false, startPrompt: null },
 ];
 
 export type Column = {
@@ -63,6 +81,8 @@ export type BoardSettings = {
   readonly notifyOnRuleMove: boolean;
   /** Add a short board instruction to every model request of a card session. */
   readonly agentUpdatesCard: boolean;
+  /** Move a card on its run events, so its column follows the work without the agent's help. */
+  readonly followRuns: boolean;
 };
 
 const DEFAULT_SETTINGS: BoardSettings = {
@@ -71,6 +91,7 @@ const DEFAULT_SETTINGS: BoardSettings = {
   idleMinutes: 10,
   notifyOnRuleMove: true,
   agentUpdatesCard: true,
+  followRuns: true,
 };
 
 /**
@@ -496,14 +517,16 @@ export function parseBoard(value: unknown): BoardDocument {
   // Older documents omit the start fields, the placement task, and the agent setting. Normalize
   // them on read (and drop the legacy `collapsed` field) so the next write stores the current
   // shape. Other unknown fields are dropped the same way.
-  const columns = (value.columns as readonly Column[]).map((column) => ({
-    id: column.id,
-    title: column.title,
-    order: column.order,
-    color: column.color,
-    startAgent: column.startAgent ?? column.id === 'in-progress',
-    startPrompt: column.startPrompt ?? null,
-  }));
+  const columns = withReadyColumn(
+    (value.columns as readonly Column[]).map((column) => ({
+      id: column.id,
+      title: column.title,
+      order: column.order,
+      color: column.color,
+      startAgent: column.startAgent ?? column.id === 'in-progress',
+      startPrompt: column.startPrompt ?? null,
+    })),
+  );
   const placements = Object.fromEntries(
     Object.entries(value.placements as Readonly<Record<string, Placement>>).map(([key, item]) => [
       key,
@@ -519,8 +542,30 @@ export function parseBoard(value: unknown): BoardDocument {
     defaultColumn: value.defaultColumn,
     placements,
     rules: value.rules,
-    settings: { ...settings, agentUpdatesCard: settings.agentUpdatesCard ?? true },
+    settings: {
+      ...settings,
+      agentUpdatesCard: settings.agentUpdatesCard ?? true,
+      followRuns: settings.followRuns ?? true,
+    },
   } as unknown as BoardDocument;
+}
+
+/** Boards written before the deploy step have no Ready to deploy column; add it before Done. */
+function withReadyColumn(columns: readonly Column[]): Column[] {
+  if (columns.some((column) => column.id === READY_COLUMN)) return [...columns];
+
+  const done = columns.find((column) => column.id === 'done');
+  return [
+    ...columns,
+    {
+      id: READY_COLUMN,
+      title: 'Ready to deploy',
+      order: done ? done.order - 0.5 : columns.length,
+      color: null,
+      startAgent: false,
+      startPrompt: null,
+    },
+  ].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -565,6 +610,7 @@ function isSettings(value: unknown): value is BoardSettings {
     (value.archived === 'hide' || value.archived === 'column') &&
     typeof value.idleMinutes === 'number' &&
     typeof value.notifyOnRuleMove === 'boolean' &&
-    (value.agentUpdatesCard === undefined || typeof value.agentUpdatesCard === 'boolean')
+    (value.agentUpdatesCard === undefined || typeof value.agentUpdatesCard === 'boolean') &&
+    (value.followRuns === undefined || typeof value.followRuns === 'boolean')
   );
 }

@@ -21,7 +21,7 @@ describe('planSort', () => {
       subject({ sessionKey: 'sidecar\nses_waiting', status: 'waiting' }),
       subject({ sessionKey: 'sidecar\nses_failed', status: 'failed' }),
       subject({ sessionKey: 'sidecar\nses_interrupted', status: 'interrupted' }),
-      subject({ sessionKey: 'sidecar\nses_done', status: 'idle', ran: true }),
+      subject({ sessionKey: 'sidecar\nses_ready', status: 'idle', ran: true }),
     ]);
 
     expect(plan.moves).toEqual([
@@ -29,12 +29,12 @@ describe('planSort', () => {
       { sessionKey: 'sidecar\nses_waiting', columnId: 'waiting' },
       { sessionKey: 'sidecar\nses_failed', columnId: 'failed' },
       { sessionKey: 'sidecar\nses_interrupted', columnId: 'failed' },
-      { sessionKey: 'sidecar\nses_done', columnId: 'done' },
+      { sessionKey: 'sidecar\nses_ready', columnId: 'ready' },
     ]);
     expect(plan.counts).toEqual([
       { columnId: 'in-progress', count: 1 },
       { columnId: 'waiting', count: 1 },
-      { columnId: 'done', count: 1 },
+      { columnId: 'ready', count: 1 },
       { columnId: 'failed', count: 2 },
     ]);
   });

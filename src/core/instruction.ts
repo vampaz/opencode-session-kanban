@@ -11,9 +11,10 @@ export type SystemText = {
 
 /** The default role of each settled column, used to describe the mapping to the agent. */
 const ROLES: readonly { readonly id: string; readonly state: string }[] = [
-  { id: 'in-progress', state: 'starting work' },
+  { id: 'in-progress', state: 'working' },
   { id: 'waiting', state: 'blocked on the user' },
-  { id: 'done', state: 'finished' },
+  { id: 'ready', state: 'work finished, not yet deployed' },
+  { id: 'done', state: 'deployed' },
   { id: 'failed', state: 'failed or unable to continue' },
 ];
 

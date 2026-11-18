@@ -29,7 +29,8 @@ function targetFor(subject: SortSubject): string | undefined {
     case 'interrupted':
       return 'failed';
     case 'idle':
-      return subject.ran ? 'done' : undefined;
+      // Finished work waits for the deploy; Done means deployed.
+      return subject.ran ? 'ready' : undefined;
   }
 }
 

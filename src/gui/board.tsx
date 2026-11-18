@@ -201,7 +201,11 @@ export function Board(props: {
     const compare = comparePlacements(document);
     const archived = document.settings.archived === 'column';
 
-    const views = document.columns.map((column) => {
+    // Render by `order`, not the stored array order, so a migrated or imported board lines up.
+    const columns = [...document.columns].sort(
+      (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+    );
+    const views = columns.map((column) => {
       const order = all
         .filter((card) => card.columnId === column.id && !(archived && card.archived))
         .sort(compare)

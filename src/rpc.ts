@@ -78,8 +78,16 @@ const settingsSchema = {
     idleMinutes: { type: 'number' },
     notifyOnRuleMove: { type: 'boolean' },
     agentUpdatesCard: { type: 'boolean' },
+    followRuns: { type: 'boolean' },
   },
-  required: ['showSubagents', 'archived', 'idleMinutes', 'notifyOnRuleMove', 'agentUpdatesCard'],
+  required: [
+    'showSubagents',
+    'archived',
+    'idleMinutes',
+    'notifyOnRuleMove',
+    'agentUpdatesCard',
+    'followRuns',
+  ],
   additionalProperties: false,
 } as const;
 

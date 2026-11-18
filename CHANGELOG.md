@@ -4,6 +4,15 @@
 
 ### Added
 
+- Cards follow their runs. On each run event the engine moves a board card by itself: started → the
+  first starting column, waiting for the user → In review, failed or interrupted → Failed, and
+  finished while still in a working column → the new **Ready to deploy** column. An answered
+  permission or form moves the card back to the working column, and a finished run also leaves a
+  card the sync itself parked in In review. A card you moved by hand or pinned is left alone, and a
+  user rule that acts on the same event wins. The **Cards follow
+  their runs** setting turns it off.
+- **Ready to deploy** column, between In review and Done. Done now means deployed. Boards without it
+  get it on read, before Done.
 - The board works in both directions. A session hook adds a short board instruction to the model
   requests of root and fork sessions, so the agent can move its own card with `kanban_move`
   (`source: agent`). The instruction is deduplicated per request across plugin instances and can be

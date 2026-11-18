@@ -27,6 +27,11 @@ export function addSettingsPage(ctx: UiContext): void {
         { id: 'archived', title: ctx.t('settings.archived'), keywords: 'archive hide column' },
         { id: 'idle', title: ctx.t('settings.idleMinutes'), keywords: 'idle rules minutes' },
         {
+          id: 'follow-runs',
+          title: ctx.t('settings.followRuns'),
+          keywords: 'run state column ready deploy failed waiting',
+        },
+        {
           id: 'agent-updates',
           title: ctx.t('settings.agentUpdatesCard'),
           keywords: 'agent self report column move prompt',
@@ -382,6 +387,18 @@ function KanbanSettings(props: { ctx: UiContext }) {
                   hideLabel
                   checked={doc().settings.notifyOnRuleMove}
                   onChange={(checked) => setSetting('notifyOnRuleMove', checked)}
+                />
+              </ctx.ui.SettingsRow>
+              <ctx.ui.SettingsRow
+                id="follow-runs"
+                title={ctx.t('settings.followRuns')}
+                description={ctx.t('settings.followRunsHint')}
+              >
+                <ctx.ui.Switch
+                  label={ctx.t('settings.followRuns')}
+                  hideLabel
+                  checked={doc().settings.followRuns}
+                  onChange={(checked) => setSetting('followRuns', checked)}
                 />
               </ctx.ui.SettingsRow>
               <ctx.ui.SettingsRow

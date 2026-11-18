@@ -13,12 +13,13 @@ describe('boardInstruction', () => {
   it('names the current column, every column, and the state mapping', () => {
     const text = boardInstruction(defaultBoard(), 'waiting');
 
-    expect(text).toContain('in the column "Waiting" (waiting)');
+    expect(text).toContain('in the column "In review" (waiting)');
     expect(text).toContain('"Backlog" (backlog)');
     expect(text).toContain('"In progress" (in-progress)');
-    expect(text).toContain('starting work → "In progress" (in-progress)');
-    expect(text).toContain('blocked on the user → "Waiting" (waiting)');
-    expect(text).toContain('finished → "Done" (done)');
+    expect(text).toContain('working → "In progress" (in-progress)');
+    expect(text).toContain('blocked on the user → "In review" (waiting)');
+    expect(text).toContain('work finished, not yet deployed → "Ready to deploy" (ready)');
+    expect(text).toContain('deployed → "Done" (done)');
     expect(text).toContain('failed or unable to continue → "Failed" (failed)');
     expect(text).toContain('anything else → "Backlog" (backlog)');
     expect(text).toContain('kanban_move');
@@ -34,7 +35,7 @@ describe('boardInstruction', () => {
       ),
     };
 
-    expect(boardInstruction(renamed, 'in-progress')).toContain('starting work → "Building"');
+    expect(boardInstruction(renamed, 'in-progress')).toContain('working → "Building"');
   });
 
   it('omits a role whose column was deleted and falls back to the default', () => {

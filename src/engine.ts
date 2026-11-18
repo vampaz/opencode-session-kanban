@@ -11,6 +11,7 @@ import {
 } from './core/events';
 import { electEngine } from './core/leader';
 import { applyRule, type RuleOutcome, type RuleSubject, type RuleTrigger } from './core/rules';
+import { applyRunSync, runStateOfEvent, type RunState } from './core/run-sync';
 import { rulesApplyTo } from './core/status';
 import { IDLE_TICK_MS, subscribeIdleTick } from './core/tick';
 
@@ -83,7 +84,9 @@ async function runEvents(
   try {
     for await (const event of ctx.event.subscribe({ types: [...EVENT_TYPES], signal })) {
       const trigger = triggerFor(event as unknown as RuleEventLike);
-      if (!trigger) continue;
+      // The run sync also reads the replies that carry no rule trigger.
+      const state = runStateOfEvent(event.type);
+      if (!trigger && !state) continue;
 
       const sessionID = eventSessionID(event as unknown as RuleEventLike);
       if (!sessionID) continue;
@@ -94,10 +97,11 @@ async function runEvents(
         eventStatusType(event as unknown as RuleEventLike),
       );
 
-      await handleTrigger(
+      await handleEvent(
         ctx,
         ports,
         trigger,
+        state,
         eventIDOf(event as unknown as RuleEventLike),
         sessionID,
       );
@@ -124,14 +128,15 @@ async function runIdleTick(ctx: Plugin.Context, ports: EnginePorts): Promise<voi
     if (!rulesApplyTo(info, { showSubagents: board.settings.showSubagents })) continue;
 
     const subject = subjectFrom(info, familyArchivedIn(info, byID));
-    await applySubject(ctx, ports, 'idle.for', `idle.${bucket}.${info.id}`, subject);
+    await applySubject(ctx, ports, 'idle.for', undefined, `idle.${bucket}.${info.id}`, subject);
   }
 }
 
-async function handleTrigger(
+async function handleEvent(
   ctx: Plugin.Context,
   ports: EnginePorts,
-  trigger: RuleTrigger,
+  trigger: RuleTrigger | undefined,
+  state: RunState | undefined,
   eventID: string,
   sessionID: string,
 ): Promise<void> {
@@ -145,7 +150,7 @@ async function handleTrigger(
     if (!rulesApplyTo(info, { showSubagents: document.settings.showSubagents })) return;
 
     const subject = await subjectFor(ctx, info);
-    await applySubject(ctx, ports, trigger, eventID, subject);
+    await applySubject(ctx, ports, trigger, state, eventID, subject);
   } catch (cause) {
     console.error('[kanban] rule handling failed', { trigger, sessionID, cause });
   }
@@ -154,22 +159,34 @@ async function handleTrigger(
 async function applySubject(
   ctx: Plugin.Context,
   ports: EnginePorts,
-  trigger: RuleTrigger,
+  trigger: RuleTrigger | undefined,
+  state: RunState | undefined,
   eventID: string,
   subject: RuleSubject,
 ): Promise<void> {
   let outcome: RuleOutcome | undefined;
+  let synced = false;
 
   try {
     const board = await commitBoard(ctx.storage, (document) => {
-      outcome = applyRule(document, subject, { trigger, eventID, now: Date.now() });
-      return outcome?.board ?? document;
+      const now = Date.now();
+      if (trigger) outcome = applyRule(document, subject, { trigger, eventID, now });
+      // A rule that acted owns this event. Otherwise the card follows its run by itself, so a
+      // forgotten agent report cannot leave the board stale.
+      if (outcome?.changed) return outcome.board;
+
+      const next = outcome?.board ?? document;
+      if (!next.settings.followRuns || !state) return next;
+
+      const following = applyRunSync(next, subject.sessionKey, state, now);
+      synced = following !== next;
+      return following;
     });
 
+    if (synced || outcome?.changed) await ports.changed(board.revision);
     if (!outcome) return;
-    const result: RuleOutcome = outcome;
 
-    if (result.changed) await ports.changed(board.revision);
+    const result: RuleOutcome = outcome;
     if (
       result.notify ||
       (result.changed && result.to !== undefined && board.settings.notifyOnRuleMove)
@@ -177,7 +194,7 @@ async function applySubject(
       await ports.notify(notifyFor(result, board, eventID, subject.sessionKey));
     }
   } catch (cause) {
-    console.error('[kanban] rule write failed', { trigger, eventID, cause });
+    console.error('[kanban] board write failed', { trigger, state, eventID, cause });
   }
 }
 
