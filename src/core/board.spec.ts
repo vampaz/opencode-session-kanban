@@ -333,10 +333,26 @@ describe('readBoard', () => {
     ).toThrowError(/invalid placement/);
   });
 
-  it('refuses a stored rule that is not a rule', () => {
-    expect(() => parseBoard({ ...defaultBoard(), rules: [{ id: 'rule_1' }] })).toThrowError(
-      /invalid rules/,
-    );
+  it('drops stored rules that are not rules instead of failing the read', () => {
+    const rule = {
+      id: 'rule_ok',
+      name: 'Ok',
+      enabled: true,
+      priority: 0,
+      trigger: ['created'],
+      match: 'all',
+      conditions: [],
+      actions: [{ type: 'notify' }],
+      overrideManual: false,
+      cooldownMs: 0,
+    } as const;
+
+    const board = parseBoard({
+      ...defaultBoard(),
+      rules: [rule, { id: 'rule_broken' }, 42],
+    });
+
+    expect(board.rules).toEqual([rule]);
   });
 
   it('round-trips the default document through JSON', () => {

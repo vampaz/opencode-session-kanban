@@ -157,6 +157,12 @@ export function createFakeContext(options: FakeContextOptions = {}) {
       };
 
       sessions.set(info.id, info);
+      // The real server emits session.created around the create call, response order unspecified.
+      pushEvent({
+        type: 'session.created',
+        id: `evt_created_${info.id}`,
+        data: { sessionID: info.id },
+      });
       return info;
     },
 

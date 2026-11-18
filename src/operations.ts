@@ -407,60 +407,59 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       const task = input.prompt?.trim() ?? '';
       const decision = decideCreate(column, task, input.start);
 
-      // The created event can be handled before the mark exists (the event and the create response
-      // are independent), so the in-flight count covers that ordering and the mark covers later ones.
+      // The created event can be handled while the create call is still in flight, before the mark
+      // exists (the event and the create response are independent). The in-flight count covers only
+      // that await, so a slow prompt later cannot stall other created events; the mark covers the rest.
       beginBoardCreate();
-      try {
-        const session = await ctx.session.create({
+      const session = await ctx.session
+        .create({
           location: { directory: input.directory },
           ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-        });
+        })
+        .finally(() => endBoardCreate());
 
-        // The created event arrives before this placement commits, so mark the session and let the
-        // engine's created handler wait for the placement instead of racing it.
-        markBoardCreate(session.id);
+      // The created event arrives before this placement commits, so mark the session and let the
+      // engine's created handler wait for the placement instead of racing it.
+      markBoardCreate(session.id);
 
-        // The task is queued before a start too, so a prompt that fails leaves it on the card.
-        let board = await commit((document) => {
-          const next = dropPlacement(document, {
-            sessionKey: sessionKeyOf(session.id),
-            columnId: column.id,
-            index: columnOrder(document, column.id).length,
-            source: 'auto',
-            updatedAt: Date.now(),
-          }).board;
+      // The task is queued before a start too, so a prompt that fails leaves it on the card.
+      let board = await commit((document) => {
+        const next = dropPlacement(document, {
+          sessionKey: sessionKeyOf(session.id),
+          columnId: column.id,
+          index: columnOrder(document, column.id).length,
+          source: 'auto',
+          updatedAt: Date.now(),
+        }).board;
 
-          return task ? setTask(next, sessionKeyOf(session.id), task) : next;
-        });
+        return task ? setTask(next, sessionKeyOf(session.id), task) : next;
+      });
 
-        if (!decision.send) {
-          return { board, column, session, started: false, queued: decision.queue };
-        }
-
-        const started = await sendStart(session.id, { kind: 'task', text: task });
-        if (!started) return { board, column, session, started: false, queued: true };
-
-        // The card follows the agent: once the task is accepted, it moves to a starting column.
-        const target = startColumn(board.columns, column);
-        if (target.id !== column.id) {
-          board = await commit(
-            (document) =>
-              dropPlacement(document, {
-                sessionKey: sessionKeyOf(session.id),
-                columnId: target.id,
-                index: columnOrder(document, target.id).length,
-                source: 'auto',
-                updatedAt: Date.now(),
-              }).board,
-          );
-        } else {
-          board = await readBoard(ctx.storage);
-        }
-
-        return { board, column: target, session, started: true, queued: false };
-      } finally {
-        endBoardCreate();
+      if (!decision.send) {
+        return { board, column, session, started: false, queued: decision.queue };
       }
+
+      const started = await sendStart(session.id, { kind: 'task', text: task });
+      if (!started) return { board, column, session, started: false, queued: true };
+
+      // The card follows the agent: once the task is accepted, it moves to a starting column.
+      const target = startColumn(board.columns, column);
+      if (target.id !== column.id) {
+        board = await commit(
+          (document) =>
+            dropPlacement(document, {
+              sessionKey: sessionKeyOf(session.id),
+              columnId: target.id,
+              index: columnOrder(document, target.id).length,
+              source: 'auto',
+              updatedAt: Date.now(),
+            }).board,
+        );
+      } else {
+        board = await readBoard(ctx.storage);
+      }
+
+      return { board, column: target, session, started: true, queued: false };
     },
 
     /** The one-time sort's preview: unplaced cards by state, and the counts per column. */

@@ -47,7 +47,9 @@ export default Plugin.define({
      * and tells the window, so the next hook read is fresh again.
      */
     function publish(revision: number): Promise<void> {
-      boardCacheHolder().board = undefined;
+      const cache = boardCacheHolder();
+      cache.board = undefined;
+      cache.generation += 1;
       return emitChanged(revision);
     }
 
@@ -189,29 +191,40 @@ export default Plugin.define({
     const instructionHook = await ctx.session.hook('context', async (event) => {
       if (hasInstruction(event.system)) return;
 
-      // The instruction hook runs on every model request of a card session, so it reads the stored
-      // board once per revision instead of once per request. The cache is process-wide: every
-      // instance's publish (and the elected engine's) drops it, so another location's write cannot
-      // leave this hook serving a stale column.
-      const cache = boardCacheHolder();
-      let board = cache.board;
-      if (!board) {
-        board = await ops.board();
-        cache.board = board;
+      // A stored board that cannot be read must not break the model request: skip the instruction.
+      try {
+        // The hook runs on every model request of a card session, so it reads the stored board once
+        // per revision instead of once per request. The cache is process-wide: every instance's
+        // publish (and the elected engine's) drops it, so another location's write cannot leave
+        // this hook serving a stale column.
+        const cache = boardCacheHolder();
+        const cached = cache.board;
+        let board = cached && Date.now() - cache.at <= BOARD_CACHE_TTL_MS ? cached : undefined;
+        if (!board) {
+          const generation = cache.generation;
+          board = await ops.board();
+          // Cache only when no write happened during the read, so a stale board is never stored.
+          if (cache.generation === generation) {
+            cache.board = board;
+            cache.at = Date.now();
+          }
+        }
+        if (!board.settings.agentUpdatesCard) return;
+
+        const info = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined);
+        if (!info) return;
+        if (!rulesApplyTo(info, { showSubagents: board.settings.showSubagents })) return;
+
+        const placement = board.placements[ops.sessionKey(info.id)];
+        const columnId =
+          placement && board.columns.some((column) => column.id === placement.columnId)
+            ? placement.columnId
+            : board.defaultColumn;
+
+        appendInstruction(event.system, boardInstruction(board, columnId));
+      } catch (cause) {
+        console.error('[kanban] could not build the board instruction', cause);
       }
-      if (!board.settings.agentUpdatesCard) return;
-
-      const info = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined);
-      if (!info) return;
-      if (!rulesApplyTo(info, { showSubagents: board.settings.showSubagents })) return;
-
-      const placement = board.placements[ops.sessionKey(info.id)];
-      const columnId =
-        placement && board.columns.some((column) => column.id === placement.columnId)
-          ? placement.columnId
-          : board.defaultColumn;
-
-      appendInstruction(event.system, boardInstruction(board, columnId));
     });
 
     return async () => {
@@ -228,11 +241,14 @@ export default Plugin.define({
  */
 const BOARD_CACHE_KEY = Symbol.for('opencode-session-kanban.board-cache');
 
-type BoardCache = { board: BoardDocument | undefined };
+/** How long a cached board is trusted without a local write. Bounds staleness from outside writers. */
+const BOARD_CACHE_TTL_MS = 5_000;
+
+type BoardCache = { board: BoardDocument | undefined; generation: number; at: number };
 
 function boardCacheHolder(): BoardCache {
   const holder = globalThis as unknown as Record<symbol, BoardCache | undefined>;
-  return (holder[BOARD_CACHE_KEY] ??= { board: undefined });
+  return (holder[BOARD_CACHE_KEY] ??= { board: undefined, generation: 0, at: 0 });
 }
 
 function field(input: unknown, key: string): unknown {

@@ -135,7 +135,15 @@ export async function runIdleTick(ctx: Plugin.Context, ports: EnginePorts): Prom
 
       const subject = subjectFrom(info, familyArchivedIn(info, byID));
       const eventID = `idle.${bucket}.${info.id}`;
-      const outcome = applyRule(working, subject, { trigger: 'idle.for', eventID, now });
+
+      let outcome: RuleOutcome | undefined;
+      try {
+        outcome = applyRule(working, subject, { trigger: 'idle.for', eventID, now });
+      } catch (cause) {
+        // One bad subject must not abort the whole tick for every other session.
+        console.error('[kanban] idle rule failed', { sessionID: info.id, cause });
+        continue;
+      }
       if (!outcome) continue;
 
       applied.push({ outcome, eventID, sessionKey: subject.sessionKey });
@@ -167,16 +175,17 @@ async function handleEvent(
   sessionID: string,
 ): Promise<void> {
   try {
-    // A board create marks its session, so this event waits for that create's placement instead of
-    // racing it. The mark can be missing when the event is handled before the create response, so a
-    // create in flight also waits. A session created elsewhere has neither and is handled at once.
-    if (trigger === 'created' && (consumeBoardCreate(sessionID) || boardCreatesInFlight() > 0)) {
-      await waitForPlacement(ctx.storage, sessionKeyOf(sessionID));
-    }
-
     const info = await ctx.session.get({ sessionID });
     const document = await readBoard(ctx.storage);
     if (!rulesApplyTo(info, { showSubagents: document.settings.showSubagents })) return;
+
+    // A board create marks its session, so this event waits for that create's placement instead of
+    // racing it. The mark can be missing when the event is handled before the create response, so a
+    // create in flight also waits. A session created elsewhere has neither and is handled at once.
+    // The wait comes after the rules filter, so a skipped subagent never waits.
+    if (trigger === 'created' && (consumeBoardCreate(sessionID) || boardCreatesInFlight() > 0)) {
+      await waitForPlacement(ctx.storage, sessionKeyOf(sessionID));
+    }
 
     const subject = await subjectFor(ctx, info);
     await applySubject(ctx, ports, trigger, state, eventID, subject);

@@ -22,9 +22,26 @@ function typeOf(value: unknown): string {
   return typeof value;
 }
 
+const KNOWN_KEYWORDS = new Set([
+  'type',
+  'enum',
+  'properties',
+  'required',
+  'additionalProperties',
+  'items',
+]);
+
 /** Returns every mismatch, so a failure names the field that drifted. */
 function validate(schema: JsonSchema, value: unknown, path = '$'): string[] {
   const errors: string[] = [];
+
+  // A keyword this validator does not implement must fail loudly instead of being ignored, or the
+  // contract test goes vacuous the day rpc.ts starts using it.
+  for (const key of Object.keys(schema)) {
+    if (!KNOWN_KEYWORDS.has(key)) {
+      errors.push(`${path}: schema uses keyword "${key}", which this validator does not implement`);
+    }
+  }
 
   if (schema.enum && !schema.enum.some((allowed) => allowed === value)) {
     errors.push(`${path}: expected one of ${schema.enum.join(', ')}, got ${JSON.stringify(value)}`);

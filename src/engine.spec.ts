@@ -20,6 +20,7 @@ import {
 import type { Rule } from './core/rules';
 import { sessionKeyOf } from './core/session-ref';
 import { runIdleTick, startEngine, waitForPlacement, type EnginePorts } from './engine';
+import { createOperations } from './operations';
 import { createFakeContext, fakeSession, type FakeContext } from './testing/fake-context';
 
 const CREATED_RULE: Rule = {
@@ -97,6 +98,10 @@ describe('created events', () => {
     const changedOnce = new Promise<void>((resolve) => {
       resolveChanged = resolve;
     });
+    let resolveSeeded!: () => void;
+    const seeded = new Promise<void>((resolve) => {
+      resolveSeeded = resolve;
+    });
     const stop = startEngine(fake.ctx, {
       changed: async () => resolveChanged(),
       notify: async () => undefined,
@@ -107,10 +112,12 @@ describe('created events', () => {
 
       // The board create commits its placement after the event, as createInColumn does.
       setTimeout(() => {
-        void seed(fake, 'ses_created');
+        void seed(fake, 'ses_created').then(() => resolveSeeded());
       }, 30);
 
-      await changedOnce;
+      // Without the wait the rule would fire before the placement lands and the seed would then
+      // overwrite the card, so both must complete before the final column is asserted.
+      await Promise.all([changedOnce, seeded]);
 
       const board = await fake.board();
       expect(board.placements[sessionKeyOf('ses_created')]?.columnId).toBe(WAITING_COLUMN);
@@ -130,6 +137,10 @@ describe('created events', () => {
     const changedOnce = new Promise<void>((resolve) => {
       resolveChanged = resolve;
     });
+    let resolveSeeded!: () => void;
+    const seeded = new Promise<void>((resolve) => {
+      resolveSeeded = resolve;
+    });
     const stop = startEngine(fake.ctx, {
       changed: async () => resolveChanged(),
       notify: async () => undefined,
@@ -139,15 +150,50 @@ describe('created events', () => {
       fake.emit(createdEvent('ses_early'));
 
       setTimeout(() => {
-        void seed(fake, 'ses_early');
+        void seed(fake, 'ses_early').then(() => resolveSeeded());
       }, 30);
 
-      await changedOnce;
+      await Promise.all([changedOnce, seeded]);
 
       const board = await fake.board();
       expect(board.placements[sessionKeyOf('ses_early')]?.columnId).toBe(WAITING_COLUMN);
     } finally {
       endBoardCreate();
+      stop();
+      fake.closeEvents();
+    }
+  });
+
+  it('applies a created rule to a session the board itself created', async () => {
+    const fake = createFakeContext();
+    await fake.writeBoard(boardWith(CREATED_RULE));
+
+    let resolveChanged!: () => void;
+    const changedOnce = new Promise<void>((resolve) => {
+      resolveChanged = resolve;
+    });
+    const stop = startEngine(fake.ctx, {
+      changed: async () => resolveChanged(),
+      notify: async () => undefined,
+    });
+
+    try {
+      const ops = createOperations(fake.ctx, async () => undefined);
+      // The fake emits session.created inside create(), before the mark exists: the in-flight
+      // count makes the engine wait for the placement this call commits right after.
+      const result = await ops.createInColumn({
+        directory: '/work/project',
+        column: BACKLOG_COLUMN,
+        title: 'Ticket',
+        prompt: 'do the thing',
+      });
+
+      await changedOnce;
+
+      const board = await fake.board();
+      expect(board.placements[sessionKeyOf(result.session.id)]?.columnId).toBe(WAITING_COLUMN);
+      expect(result.queued).toBe(true);
+    } finally {
       stop();
       fake.closeEvents();
     }

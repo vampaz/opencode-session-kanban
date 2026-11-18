@@ -1,6 +1,7 @@
 import type { Schema } from 'effect';
 
-import { isRule, type Rule } from './rules';
+import { isRule } from './rule-guards';
+import type { Rule } from './rules';
 
 /** Bumped only when a stored document needs a migration. */
 export const BOARD_VERSION = 1;
@@ -569,8 +570,14 @@ export function parseBoard(value: unknown): BoardDocument {
     if (!isPlacement(item)) throw new Error('The stored board has an invalid placement.');
     placements[key] = { ...item, task: item.task ?? null };
   }
-  if (!Array.isArray(value.rules) || !value.rules.every(isRule)) {
-    throw new Error('The stored board has invalid rules.');
+  if (!Array.isArray(value.rules)) throw new Error('The stored board has invalid rules.');
+  // A rule that fails validation is dropped, not fatal: every read goes through here (including
+  // import and reset), so one bad stored rule must not lock the board out of every operation.
+  const rules = value.rules.filter(isRule);
+  if (rules.length !== value.rules.length) {
+    console.warn('[kanban] dropped invalid stored rules', {
+      dropped: value.rules.length - rules.length,
+    });
   }
   if (!isSettings(value.settings)) throw new Error('The stored board has invalid settings.');
 
@@ -595,7 +602,7 @@ export function parseBoard(value: unknown): BoardDocument {
     columns,
     defaultColumn: value.defaultColumn,
     placements,
-    rules: value.rules,
+    rules,
     settings: {
       showSubagents: settings.showSubagents,
       archived: settings.archived,

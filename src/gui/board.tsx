@@ -287,9 +287,12 @@ export function Board(props: {
         ctx.toast.show({ title: ctx.t('board.started', { title }) });
       }
     } catch (cause) {
-      setBoard(previous);
-      // Re-read so a concurrent server change is not clobbered by the local revert.
-      await refresh();
+      // Re-read the server state first; only fall back to the pre-move snapshot when even that fails.
+      try {
+        await refresh();
+      } catch {
+        setBoard(previous);
+      }
       fail('move.failed', cause);
     }
   }
@@ -322,8 +325,9 @@ export function Board(props: {
     const sessionKey = dragKey(event);
     setDragging(undefined);
     setOverColumn(undefined);
-    // The archived column is virtual: it has no server-side column to move a card to.
-    if (!sessionKey || sessionKey === card.key || card.columnId === ARCHIVED_COLUMN) return;
+    // Archived cards render only in the virtual archived column; dropping on one must not move the
+    // dragged card into that card's old column.
+    if (!sessionKey || sessionKey === card.key || card.archived) return;
     void moveCard(sessionKey, card.columnId, indexFor(card.columnId, card.key, sessionKey));
   }
 
