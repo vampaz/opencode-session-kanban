@@ -22,7 +22,8 @@
 ### Changed
 
 - The New session dialog names its column, shows visible field labels, picks the project from a
-  list (repeated names show their folder) or a typed folder, and takes a multi-line **Task**. It has
+  list (repeated names show their folder) or a typed folder, and requires a title and a multi-line
+  **Task**. It has
   two actions: **Create** keeps the card in the column with its title and task queued, and **Create
   and start** (`Cmd+Enter`) sends them to the agent and then moves the card to the first starting
   column. The board stays in view and the toast offers **Open**. `session.create` takes `start` and

@@ -2,7 +2,7 @@ import { Match, Show, Switch, createSignal } from 'solid-js';
 import type { DialogHandle } from '@opencode/plugin/gui';
 
 import type { Column } from '../core/board';
-import { startColumn, ticketText } from '../core/start';
+import { startColumn } from '../core/start';
 import { projectLabel } from '../core/status';
 import { kanbanClient, type UiContext } from './client';
 import { serverOf } from './sessions';
@@ -88,7 +88,8 @@ function NewSessionDialog(props: {
   const typingPath = project().kind === 'other';
 
   const target = () => startColumn(props.columns, props.column);
-  const hasText = () => ticketText(title(), task()) !== '';
+  // A ticket needs a project, a title, and a task before either button creates it.
+  const complete = () => directory() !== '' && title().trim() !== '' && task().trim() !== '';
   const creating = (start: boolean) => {
     const current = phase();
     return current.kind === 'creating' && current.start === start;
@@ -116,8 +117,8 @@ function NewSessionDialog(props: {
 
   /** What each button does here, so the choice between them is plain before a click. */
   function outcome(): string {
+    if (!complete()) return ctx.t('newSession.needsText');
     const keep = ctx.t('newSession.keeps', { column: props.column.title });
-    if (!hasText()) return `${keep} ${ctx.t('newSession.startNeedsText')}`;
     const start =
       target().id === props.column.id
         ? ctx.t('newSession.startsHere')
@@ -137,8 +138,7 @@ function NewSessionDialog(props: {
   async function create(start: boolean): Promise<void> {
     const current = server();
     const path = directory();
-    if (!current || !path || phase().kind === 'creating') return;
-    if (start && !hasText()) return;
+    if (!current || !complete() || phase().kind === 'creating') return;
 
     setPhase({ kind: 'creating', start });
     try {
@@ -211,7 +211,7 @@ function NewSessionDialog(props: {
           </ctx.ui.Button>
           <ctx.ui.Button
             busy={creating(false)}
-            disabled={!directory() || creating(true)}
+            disabled={!complete() || creating(true)}
             onClick={() => void create(false)}
           >
             {ctx.t('newSession.create')}
@@ -219,7 +219,7 @@ function NewSessionDialog(props: {
           <ctx.ui.Button
             variant="contrast"
             busy={creating(true)}
-            disabled={!directory() || !hasText() || creating(false)}
+            disabled={!complete() || creating(false)}
             onClick={() => void create(true)}
           >
             {ctx.t('newSession.createAndStart')}
@@ -270,7 +270,6 @@ function NewSessionDialog(props: {
         <div class="sk-field">
           <span class="sk-field__label" aria-hidden="true">
             {ctx.t('newSession.name')}
-            <span class="sk-field__optional">{ctx.t('newSession.optional')}</span>
           </span>
           <ctx.ui.TextInput
             label={ctx.t('newSession.name')}
@@ -286,7 +285,6 @@ function NewSessionDialog(props: {
         <div class="sk-field">
           <span class="sk-field__label" aria-hidden="true">
             {ctx.t('newSession.task')}
-            <span class="sk-field__optional">{ctx.t('newSession.optional')}</span>
           </span>
           <textarea
             class="sk-textarea sk-textarea--task"

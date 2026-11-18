@@ -284,7 +284,6 @@ export const boardStyles = `
   font-weight: 500;
 }
 
-.sk-field__optional,
 .sk-field__hint {
   color: var(--text-weak, inherit);
   font-size: 0.72rem;

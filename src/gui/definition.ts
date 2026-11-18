@@ -57,12 +57,11 @@ export const definition = Plugin.define({
       'newSession.nameHint': 'Short name for the card',
       'newSession.task': 'Task',
       'newSession.taskHint': 'What should the agent do?',
-      'newSession.optional': 'Optional',
       'newSession.keeps': 'Create keeps the card in {{column}}.',
       'newSession.starts':
         'Create and start runs the agent on the title and task, and moves the card to {{column}}.',
       'newSession.startsHere': 'Create and start runs the agent on the title and task.',
-      'newSession.startNeedsText': 'Add a title or a task to start the agent.',
+      'newSession.needsText': 'Add a title and a task to create the card.',
       'newSession.started': 'Agent started',
       'newSession.startedDetail': 'The card is in {{column}}.',
       'newSession.startFailed': 'Could not start the agent',
