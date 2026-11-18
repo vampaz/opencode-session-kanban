@@ -76,7 +76,7 @@ describe('withRuleDefaults', () => {
     expect(rule.trigger).toEqual(['created']);
     expect(rule.match).toBe('all');
     expect(rule.actions).toEqual([]);
-    expect(String(rule.id)).toMatch(/^rule_/);
+    expect(String(rule.id)).toMatch(/^rule_[0-9a-f-]{36}$/);
   });
 
   it('keeps the fields the caller set', () => {

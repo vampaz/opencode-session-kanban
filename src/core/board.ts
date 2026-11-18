@@ -1,6 +1,6 @@
 import type { Schema } from 'effect';
 
-import type { Rule } from './rules';
+import { isRule, type Rule } from './rules';
 
 /** Bumped only when a stored document needs a migration. */
 export const BOARD_VERSION = 1;
@@ -11,14 +11,29 @@ const BOARD_KEY = 'board';
 /** A write retries when another instance replaced the document first. */
 const MAX_WRITE_ATTEMPTS = 5;
 
+/** The settled default column ids. A board stores columns, so these are only the built-in set. */
+export const BACKLOG_COLUMN = 'backlog';
+export const IN_PROGRESS_COLUMN = 'in-progress';
+export const WAITING_COLUMN = 'waiting';
 /** The column a finished run lands in, before the deploy. Done means deployed. */
 export const READY_COLUMN = 'ready';
+export const DONE_COLUMN = 'done';
+export const FAILED_COLUMN = 'failed';
+/** The GUI's virtual column for archived sessions. It is never stored in `columns`. */
+export const ARCHIVED_COLUMN = 'archived';
 
 /** The settled default set. Written to a fresh document and editable afterwards. */
 export const DEFAULT_COLUMNS: readonly Column[] = [
-  { id: 'backlog', title: 'Backlog', order: 0, color: null, startAgent: false, startPrompt: null },
   {
-    id: 'in-progress',
+    id: BACKLOG_COLUMN,
+    title: 'Backlog',
+    order: 0,
+    color: null,
+    startAgent: false,
+    startPrompt: null,
+  },
+  {
+    id: IN_PROGRESS_COLUMN,
     title: 'In progress',
     order: 1,
     color: null,
@@ -26,7 +41,7 @@ export const DEFAULT_COLUMNS: readonly Column[] = [
     startPrompt: null,
   },
   {
-    id: 'waiting',
+    id: WAITING_COLUMN,
     title: 'In review',
     order: 2,
     color: null,
@@ -41,8 +56,22 @@ export const DEFAULT_COLUMNS: readonly Column[] = [
     startAgent: false,
     startPrompt: null,
   },
-  { id: 'done', title: 'Done', order: 4, color: null, startAgent: false, startPrompt: null },
-  { id: 'failed', title: 'Failed', order: 5, color: null, startAgent: false, startPrompt: null },
+  {
+    id: DONE_COLUMN,
+    title: 'Done',
+    order: 4,
+    color: null,
+    startAgent: false,
+    startPrompt: null,
+  },
+  {
+    id: FAILED_COLUMN,
+    title: 'Failed',
+    order: 5,
+    color: null,
+    startAgent: false,
+    startPrompt: null,
+  },
 ];
 
 export type Column = {
@@ -85,6 +114,12 @@ export type BoardSettings = {
   readonly followRuns: boolean;
 };
 
+/** A stored settings object: boards written before the two boolean fields lack them. */
+type StoredSettings = Omit<BoardSettings, 'agentUpdatesCard' | 'followRuns'> & {
+  readonly agentUpdatesCard?: boolean;
+  readonly followRuns?: boolean;
+};
+
 const DEFAULT_SETTINGS: BoardSettings = {
   showSubagents: false,
   archived: 'hide',
@@ -114,11 +149,16 @@ export function defaultBoard(): BoardDocument {
     version: BOARD_VERSION,
     revision: 0,
     columns: DEFAULT_COLUMNS,
-    defaultColumn: 'backlog',
+    defaultColumn: BACKLOG_COLUMN,
     placements: {},
     rules: [],
     settings: DEFAULT_SETTINGS,
   };
+}
+
+/** The column with that id, or undefined when the board no longer has it. */
+export function columnById(board: BoardDocument, id: string): Column | undefined {
+  return board.columns.find((column) => column.id === id);
 }
 
 export type MoveInput = {
@@ -129,9 +169,25 @@ export type MoveInput = {
   readonly updatedAt: number;
 };
 
-/** Applies one placement, without touching `revision`. A manual move clears the rule that placed it. */
+/**
+ * Applies one placement, without touching `revision`. A manual move clears the rule that placed it.
+ * A move that would write the placement it already holds returns the same document, so a no-op
+ * drop does not bump the revision.
+ */
 export function movePlacement(board: BoardDocument, input: MoveInput): BoardDocument {
   const previous = board.placements[input.sessionKey];
+  const source = input.source ?? 'manual';
+
+  if (
+    previous &&
+    previous.columnId === input.columnId &&
+    previous.position === input.position &&
+    previous.source === source &&
+    previous.ruleID === null &&
+    previous.lastRuleEventID === null
+  ) {
+    return board;
+  }
 
   return {
     ...board,
@@ -140,7 +196,7 @@ export function movePlacement(board: BoardDocument, input: MoveInput): BoardDocu
       [input.sessionKey]: {
         columnId: input.columnId,
         position: input.position,
-        source: input.source ?? 'manual',
+        source,
         pinned: previous?.pinned ?? false,
         ruleID: null,
         updatedAt: input.updatedAt,
@@ -508,32 +564,30 @@ export function parseBoard(value: unknown): BoardDocument {
   if (!isRecord(value.placements)) {
     throw new Error('The stored board has invalid placements.');
   }
-  for (const placement of Object.values(value.placements)) {
-    if (!isPlacement(placement)) throw new Error('The stored board has an invalid placement.');
+  const placements: Record<string, Placement> = {};
+  for (const [key, item] of Object.entries(value.placements)) {
+    if (!isPlacement(item)) throw new Error('The stored board has an invalid placement.');
+    placements[key] = { ...item, task: item.task ?? null };
   }
-  if (!Array.isArray(value.rules)) throw new Error('The stored board has invalid rules.');
+  if (!Array.isArray(value.rules) || !value.rules.every(isRule)) {
+    throw new Error('The stored board has invalid rules.');
+  }
   if (!isSettings(value.settings)) throw new Error('The stored board has invalid settings.');
 
   // Older documents omit the start fields, the placement task, and the agent setting. Normalize
   // them on read (and drop the legacy `collapsed` field) so the next write stores the current
   // shape. Other unknown fields are dropped the same way.
   const columns = withReadyColumn(
-    (value.columns as readonly Column[]).map((column) => ({
+    value.columns.map((column) => ({
       id: column.id,
       title: column.title,
       order: column.order,
       color: column.color,
-      startAgent: column.startAgent ?? column.id === 'in-progress',
+      startAgent: column.startAgent ?? column.id === IN_PROGRESS_COLUMN,
       startPrompt: column.startPrompt ?? null,
     })),
   );
-  const placements = Object.fromEntries(
-    Object.entries(value.placements as Readonly<Record<string, Placement>>).map(([key, item]) => [
-      key,
-      { ...item, task: item.task ?? null },
-    ]),
-  );
-  const settings = value.settings as BoardSettings;
+  const settings = value.settings;
 
   return {
     version: value.version,
@@ -543,18 +597,21 @@ export function parseBoard(value: unknown): BoardDocument {
     placements,
     rules: value.rules,
     settings: {
-      ...settings,
+      showSubagents: settings.showSubagents,
+      archived: settings.archived,
+      idleMinutes: settings.idleMinutes,
+      notifyOnRuleMove: settings.notifyOnRuleMove,
       agentUpdatesCard: settings.agentUpdatesCard ?? true,
       followRuns: settings.followRuns ?? true,
     },
-  } as unknown as BoardDocument;
+  };
 }
 
 /** Boards written before the deploy step have no Ready to deploy column; add it before Done. */
 function withReadyColumn(columns: readonly Column[]): Column[] {
   if (columns.some((column) => column.id === READY_COLUMN)) return [...columns];
 
-  const done = columns.find((column) => column.id === 'done');
+  const done = columns.find((column) => column.id === DONE_COLUMN);
   return [
     ...columns,
     {
@@ -603,7 +660,7 @@ function isPlacement(value: unknown): value is Placement {
   );
 }
 
-function isSettings(value: unknown): value is BoardSettings {
+function isSettings(value: unknown): value is StoredSettings {
   return (
     isRecord(value) &&
     typeof value.showSubagents === 'boolean' &&

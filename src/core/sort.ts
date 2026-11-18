@@ -1,4 +1,10 @@
-import type { BoardDocument } from './board';
+import {
+  FAILED_COLUMN,
+  IN_PROGRESS_COLUMN,
+  READY_COLUMN,
+  WAITING_COLUMN,
+  type BoardDocument,
+} from './board';
 import type { CardStatus } from './status';
 
 /** What the one-time sort reads about a session. Placed and pinned cards are never moved. */
@@ -22,15 +28,15 @@ export type SortPlan = {
 function targetFor(subject: SortSubject): string | undefined {
   switch (subject.status) {
     case 'waiting':
-      return 'waiting';
+      return WAITING_COLUMN;
     case 'running':
-      return 'in-progress';
+      return IN_PROGRESS_COLUMN;
     case 'failed':
     case 'interrupted':
-      return 'failed';
+      return FAILED_COLUMN;
     case 'idle':
       // Finished work waits for the deploy; Done means deployed.
-      return subject.ran ? 'ready' : undefined;
+      return subject.ran ? READY_COLUMN : undefined;
   }
 }
 

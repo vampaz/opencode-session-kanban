@@ -2,11 +2,19 @@ import type { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ARCHIVED_COLUMN,
+  BACKLOG_COLUMN,
   BOARD_LOCK_KEY,
   BOARD_VERSION,
   DEFAULT_COLUMNS,
+  DONE_COLUMN,
+  FAILED_COLUMN,
+  IN_PROGRESS_COLUMN,
+  READY_COLUMN,
   REBALANCE_STEP,
+  WAITING_COLUMN,
   clearPlacement,
+  columnById,
   columnOrder,
   commitBoard,
   defaultBoard,
@@ -77,6 +85,25 @@ describe('DEFAULT_COLUMNS', () => {
   it('uses unique ids and a stable order', () => {
     expect(new Set(DEFAULT_COLUMNS.map((column) => column.id)).size).toBe(DEFAULT_COLUMNS.length);
     expect(DEFAULT_COLUMNS.map((column) => column.order)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('is built from the shared id constants', () => {
+    expect(DEFAULT_COLUMNS.map((column) => column.id)).toEqual([
+      BACKLOG_COLUMN,
+      IN_PROGRESS_COLUMN,
+      WAITING_COLUMN,
+      READY_COLUMN,
+      DONE_COLUMN,
+      FAILED_COLUMN,
+    ]);
+    expect(ARCHIVED_COLUMN).toBe('archived');
+  });
+});
+
+describe('columnById', () => {
+  it('finds a stored column and reports a missing one', () => {
+    expect(columnById(defaultBoard(), DONE_COLUMN)?.title).toBe('Done');
+    expect(columnById(defaultBoard(), ARCHIVED_COLUMN)).toBeUndefined();
   });
 });
 
@@ -178,6 +205,29 @@ describe('movePlacement', () => {
 
     expect(Object.keys(moved.placements)).toEqual(['sidecar\nses_1']);
     expect(moved.placements['sidecar\nses_1']?.columnId).toBe('done');
+  });
+
+  it('returns the same document when it would write the placement it holds', () => {
+    const board = boardWith({ columnId: 'done', position: 5 });
+
+    expect(
+      movePlacement(board, {
+        sessionKey: 'sidecar\nses_1',
+        columnId: 'done',
+        position: 5,
+        updatedAt: 99,
+      }),
+    ).toBe(board);
+  });
+
+  it('still writes when the source or a rule marker would change', () => {
+    const board = boardWith({ columnId: 'done', position: 5 });
+    const samePlace = { sessionKey: 'sidecar\nses_1', columnId: 'done', position: 5, updatedAt: 9 };
+
+    expect(movePlacement(board, { ...samePlace, source: 'auto' })).not.toBe(board);
+
+    const ruled = boardWith({ columnId: 'done', position: 5, source: 'rule', ruleID: 'rule_1' });
+    expect(movePlacement(ruled, { ...samePlace, source: 'rule' })).not.toBe(ruled);
   });
 });
 
@@ -282,6 +332,18 @@ describe('readBoard', () => {
       parseBoard({ ...defaultBoard(), placements: { 'sidecar\nses_1': { columnId: 1 } } }),
     ).toThrowError(/invalid placement/);
   });
+
+  it('refuses a stored rule that is not a rule', () => {
+    expect(() => parseBoard({ ...defaultBoard(), rules: [{ id: 'rule_1' }] })).toThrowError(
+      /invalid rules/,
+    );
+  });
+
+  it('round-trips the default document through JSON', () => {
+    const stored = JSON.parse(JSON.stringify(defaultBoard()));
+
+    expect(parseBoard(stored)).toEqual(defaultBoard());
+  });
 });
 
 describe('commitBoard', () => {
@@ -305,6 +367,28 @@ describe('commitBoard', () => {
 
     expect(store.writes).toBe(0);
     expect(board.revision).toBe(0);
+  });
+
+  it('skips the write and the revision bump for a drop that lands where the card is', async () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: { 'sidecar\nses_1': { ...placementAt(0), columnId: 'done' } },
+    };
+    const store = createStorage(board);
+
+    const committed = await commitBoard(
+      store.storage,
+      (current) =>
+        dropPlacement(current, {
+          sessionKey: 'sidecar\nses_1',
+          columnId: 'done',
+          index: 0,
+          updatedAt: 99,
+        }).board,
+    );
+
+    expect(store.writes).toBe(0);
+    expect(committed.revision).toBe(board.revision);
   });
 
   it('retries when another instance wrote first', async () => {
@@ -480,6 +564,39 @@ describe('dropPlacement', () => {
         .map((card) => card.position),
     ).toEqual([0, REBALANCE_STEP, REBALANCE_STEP * 2]);
     expect(result.board.placements['sidecar\nnew']?.position).toBe(REBALANCE_STEP / 2);
+  });
+  it('returns the identical board when the card lands where it already is', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: { 'sidecar\nses_1': { ...placementAt(0), columnId: 'done' } },
+    };
+
+    const result = dropPlacement(board, {
+      sessionKey: 'sidecar\nses_1',
+      columnId: 'done',
+      index: 0,
+      updatedAt: 99,
+    });
+
+    expect(result.rebalanced).toBe(false);
+    expect(result.board).toBe(board);
+  });
+
+  it('still returns a new board for a real change', () => {
+    const board: BoardDocument = {
+      ...defaultBoard(),
+      placements: { 'sidecar\nses_1': { ...placementAt(0), columnId: 'done' } },
+    };
+
+    const result = dropPlacement(board, {
+      sessionKey: 'sidecar\nses_1',
+      columnId: 'backlog',
+      index: 0,
+      updatedAt: 99,
+    });
+
+    expect(result.board).not.toBe(board);
+    expect(result.board.placements['sidecar\nses_1']?.columnId).toBe('backlog');
   });
 });
 

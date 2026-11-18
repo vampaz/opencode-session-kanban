@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { CardStatus } from '../core/status';
 
 export type Parsed<T> =
@@ -136,10 +138,7 @@ export function withRuleDefaults(value: unknown): unknown {
   const input = value as Record<string, unknown>;
 
   return {
-    id:
-      typeof input.id === 'string' && input.id.trim()
-        ? input.id
-        : `rule_${Math.random().toString(36).slice(2, 10)}`,
+    id: typeof input.id === 'string' && input.id.trim() ? input.id : `rule_${randomUUID()}`,
     name: input.name,
     enabled: input.enabled ?? true,
     priority: input.priority ?? 0,

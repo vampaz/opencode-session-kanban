@@ -91,7 +91,7 @@ const settingsSchema = {
   additionalProperties: false,
 } as const;
 
-const snapshotSchema = {
+export const snapshotSchema = {
   type: 'object',
   properties: {
     version: { type: 'number' },

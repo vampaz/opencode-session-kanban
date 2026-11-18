@@ -1,14 +1,14 @@
-import type { Column, PlacementSource } from './board';
+import { IN_PROGRESS_COLUMN, type Column, type PlacementSource } from './board';
 
 /** Sent to a session that has already run when its column sets no start message. */
 export const DEFAULT_START_PROMPT = 'Continue with this task.';
 
-/** Legacy columns default by id: `in-progress` starts the agent, the others do not. */
+/** Legacy columns default by id: the in-progress column starts the agent, the others do not. */
 export function startsAgent(column: {
   readonly id: string;
   readonly startAgent?: boolean;
 }): boolean {
-  return column.startAgent ?? column.id === 'in-progress';
+  return column.startAgent ?? column.id === IN_PROGRESS_COLUMN;
 }
 
 /** The message a continuing session receives: the column's own, or the built-in default. */

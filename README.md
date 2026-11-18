@@ -133,6 +133,10 @@ an unknown column. `kanban_move` records an `agent` placement, so rules may stil
   `running` and `waiting` from the plugin's event stream. A session that changed state before the
   server started reads `idle` until its next event, and a session waiting on a form is not visible
   to the server.
+- **Listing caps**: the tools and the idle rules read at most 200 sessions per `session.list`
+  call, and the desktop's fork bootstrap reads at most 5 pages (1000 sessions) to find forks whose
+  root is not loaded yet. Sessions beyond those caps are not visible to the board until their
+  family is loaded.
 - Rules and movement only apply to sessions that render as cards (roots and forks; subagents only
   with `showSubagents`). Archived families are never moved.
 - **Each start costs tokens.** Moving a card into a starting column sends one model request pair (the
