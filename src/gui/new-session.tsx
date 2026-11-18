@@ -11,7 +11,6 @@ export function openNewSession(
   options: {
     readonly columnId: string;
     readonly directory?: string | undefined;
-    readonly index: () => number;
   },
 ): void {
   ctx.dialogs.open((dialog) => (
@@ -20,7 +19,6 @@ export function openNewSession(
       dialog={dialog}
       columnId={options.columnId}
       directory={options.directory}
-      index={options.index}
     />
   ));
 }
@@ -30,7 +28,6 @@ function NewSessionDialog(props: {
   dialog: DialogHandle;
   columnId: string;
   directory?: string | undefined;
-  index: () => number;
 }) {
   const ctx = props.ctx;
   const server = () => serverOf(ctx);
@@ -51,7 +48,7 @@ function NewSessionDialog(props: {
 
   const [directory, setDirectory] = createSignal(props.directory ?? '');
   const [title, setTitle] = createSignal('');
-  const [prompt, setPrompt] = createSignal('');
+  const [task, setTask] = createSignal('');
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
 
@@ -70,25 +67,22 @@ function NewSessionDialog(props: {
     setBusy(true);
     setError(undefined);
     try {
-      const created = current.data.session.create({
-        location: { directory: target },
-        ...(title().trim() ? { title: title().trim() } : {}),
-      });
-      const info = await created.request;
-      current.data.session.remember(info);
-
-      await kanbanClient(ctx).move({
-        sessionKey: `${current.id}\n${info.id}`,
+      // The server owns the start-or-queue rule, so the dialog only supplies the task.
+      const result = (await kanbanClient(ctx)['session.create']({
+        directory: target,
         columnId: props.columnId,
-        index: props.index(),
-        source: 'auto',
-      });
+        ...(title().trim() ? { title: title().trim() } : {}),
+        ...(task().trim() ? { task: task().trim() } : {}),
+      })) as { sessionID: string; started: boolean; queued: boolean };
 
-      if (prompt().trim()) {
-        await current.data.session.prompt({ sessionID: info.id, text: prompt().trim() });
-      }
+      const info = await current.client.session
+        .get({ sessionID: result.sessionID })
+        .catch(() => undefined);
+      if (info) current.data.session.remember(info);
 
-      ctx.tabs.open({ server: current.id, id: info.id }, { focus: true });
+      ctx.tabs.open({ server: current.id, id: result.sessionID }, { focus: true });
+      if (result.queued) ctx.toast.show({ title: ctx.t('newSession.queued') });
+      else if (result.started) ctx.toast.show({ title: ctx.t('newSession.started') });
       props.dialog.close();
     } catch (cause) {
       console.error('[kanban] could not create the session', cause);
@@ -143,10 +137,10 @@ function NewSessionDialog(props: {
           onSubmit={() => void create()}
         />
         <ctx.ui.TextInput
-          label={ctx.t('newSession.prompt')}
-          placeholder={ctx.t('newSession.promptHint')}
-          value={prompt()}
-          onInput={setPrompt}
+          label={ctx.t('newSession.task')}
+          placeholder={ctx.t('newSession.taskHint')}
+          value={task()}
+          onInput={setTask}
           onSubmit={() => void create()}
         />
         <Show when={error()}>{(message) => <p class="sk-detail">{message()}</p>}</Show>

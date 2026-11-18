@@ -16,4 +16,11 @@ describe('commitText', () => {
     expect(commitText('', 'Backlog')).toEqual({ kind: 'revert' });
     expect(commitText('   ', 'Backlog')).toEqual({ kind: 'revert' });
   });
+
+  it('saves an empty value when the field allows it', () => {
+    expect(commitText('', 'Old', { allowEmpty: true })).toEqual({ kind: 'save', value: '' });
+    expect(commitText('  ', 'Old', { allowEmpty: true })).toEqual({ kind: 'save', value: '' });
+    expect(commitText('Old', 'Old', { allowEmpty: true })).toEqual({ kind: 'none' });
+    expect(commitText('', '', { allowEmpty: true })).toEqual({ kind: 'none' });
+  });
 });

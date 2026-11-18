@@ -2,6 +2,8 @@ import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from
 import { SettingsPage, type DialogHandle, type UiMenuEntry } from '@opencode/plugin/gui';
 
 import { defaultBoard, type BoardDocument, type BoardSettings, type Column } from '../core/board';
+import { DEFAULT_START_PROMPT } from '../core/start';
+import type { SortCount } from '../core/sort';
 import type { PreviewMove, Rule } from '../core/rules';
 import { kanbanClient, type UiContext } from './client';
 import { openRuleEditor } from './rule-editor';
@@ -25,6 +27,11 @@ export function addSettingsPage(ctx: UiContext): void {
         { id: 'archived', title: ctx.t('settings.archived'), keywords: 'archive hide column' },
         { id: 'idle', title: ctx.t('settings.idleMinutes'), keywords: 'idle rules minutes' },
         {
+          id: 'agent-updates',
+          title: ctx.t('settings.agentUpdatesCard'),
+          keywords: 'agent self report column move prompt',
+        },
+        {
           id: 'notify-moves',
           title: ctx.t('settings.notifyOnRuleMove'),
           keywords: 'notify rule move',
@@ -39,7 +46,11 @@ export function addSettingsPage(ctx: UiContext): void {
           title: ctx.t('settings.rules'),
           keywords: 'trigger condition action priority preview dry run',
         },
-        { id: 'data', title: ctx.t('settings.data'), keywords: 'export import reset json' },
+        {
+          id: 'data',
+          title: ctx.t('settings.data'),
+          keywords: 'export import reset json sort sessions state',
+        },
       ];
     },
     render: () => <KanbanSettings ctx={ctx} />,
@@ -137,6 +148,8 @@ function KanbanSettings(props: { ctx: UiContext }) {
       title,
       order: doc.columns.length,
       color: null,
+      startAgent: false,
+      startPrompt: null,
     };
 
     void run(() => client()['columns.upsert']({ column })).then(() => setNewColumn(''));
@@ -203,6 +216,44 @@ function KanbanSettings(props: { ctx: UiContext }) {
       ?.data.session.list()
       .find((session) => session.id === id);
     return info?.title?.trim() || id;
+  }
+
+  /** Preview the one-time sort, then place the cards only after a confirmation. */
+  async function sortSessions(): Promise<void> {
+    try {
+      const preview = (await client()['sort.preview']({})) as {
+        moves: readonly { columnId: string }[];
+        counts: readonly SortCount[];
+      };
+      if (preview.moves.length === 0) {
+        ctx.toast.show({ title: ctx.t('settings.sortEmpty') });
+        return;
+      }
+
+      const counts = preview.counts
+        .map((count) =>
+          ctx.t('settings.sortCount', {
+            column: columnTitle(count.columnId),
+            count: String(count.count),
+          }),
+        )
+        .join(' · ');
+      const confirmed = await ctx.dialogs.confirm({
+        title: ctx.t('settings.sortTitle'),
+        description: ctx.t('settings.sortDescription', {
+          count: String(preview.moves.length),
+          counts,
+        }),
+        confirm: ctx.t('settings.sortConfirm'),
+      });
+      if (!confirmed) return;
+
+      const result = (await client()['sort.apply']({})) as { placed: number };
+      await refresh();
+      ctx.toast.show({ title: ctx.t('settings.sortDone', { count: String(result.placed) }) });
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
   }
 
   function projectItems(): UiMenuEntry[] {
@@ -331,6 +382,18 @@ function KanbanSettings(props: { ctx: UiContext }) {
                   hideLabel
                   checked={doc().settings.notifyOnRuleMove}
                   onChange={(checked) => setSetting('notifyOnRuleMove', checked)}
+                />
+              </ctx.ui.SettingsRow>
+              <ctx.ui.SettingsRow
+                id="agent-updates"
+                title={ctx.t('settings.agentUpdatesCard')}
+                description={ctx.t('settings.agentUpdatesCardHint')}
+              >
+                <ctx.ui.Switch
+                  label={ctx.t('settings.agentUpdatesCard')}
+                  hideLabel
+                  checked={doc().settings.agentUpdatesCard}
+                  onChange={(checked) => setSetting('agentUpdatesCard', checked)}
                 />
               </ctx.ui.SettingsRow>
             </ctx.ui.SettingsSection>
@@ -474,6 +537,15 @@ function KanbanSettings(props: { ctx: UiContext }) {
                 <ctx.ui.Button onClick={importJSON}>{ctx.t('settings.import')}</ctx.ui.Button>
               </ctx.ui.SettingsRow>
               <ctx.ui.SettingsRow
+                id="sort"
+                title={ctx.t('settings.sort')}
+                description={ctx.t('settings.sortHint')}
+              >
+                <ctx.ui.Button icon="status" onClick={() => void sortSessions()}>
+                  {ctx.t('settings.sortAction')}
+                </ctx.ui.Button>
+              </ctx.ui.SettingsRow>
+              <ctx.ui.SettingsRow
                 title={ctx.t('settings.reset')}
                 description={ctx.t('settings.resetHint')}
               >
@@ -510,37 +582,55 @@ function ColumnRow(props: {
 
   return (
     <div class="sk-settings__column">
-      <input
-        class="sk-color"
-        type="color"
-        aria-label={ctx.t('settings.color')}
-        value={props.column.color ?? '#7ba797'}
-        onChange={(event) => props.onChange({ color: event.currentTarget.value })}
-      />
-      <SavedTextInput
-        ctx={ctx}
-        class="sk-settings__grow"
-        label={ctx.t('settings.columnName')}
-        value={props.column.title}
-        onSave={(title) => props.onChange({ title })}
-      />
-      <ctx.ui.IconButton
-        icon="arrow-up"
-        label={ctx.t('settings.moveUp')}
-        disabled={props.first}
-        onClick={() => props.onMove(-1)}
-      />
-      <ctx.ui.IconButton
-        icon="arrow-down-to-line"
-        label={ctx.t('settings.moveDown')}
-        disabled={props.last}
-        onClick={() => props.onMove(1)}
-      />
-      <ctx.ui.IconButton
-        icon="trash"
-        label={ctx.t('settings.deleteColumn')}
-        onClick={props.onDelete}
-      />
+      <div class="sk-settings__column-main">
+        <input
+          class="sk-color"
+          type="color"
+          aria-label={ctx.t('settings.color')}
+          value={props.column.color ?? '#7ba797'}
+          onChange={(event) => props.onChange({ color: event.currentTarget.value })}
+        />
+        <SavedTextInput
+          ctx={ctx}
+          class="sk-settings__grow"
+          label={ctx.t('settings.columnName')}
+          value={props.column.title}
+          onSave={(title) => props.onChange({ title })}
+        />
+        <ctx.ui.IconButton
+          icon="arrow-up"
+          label={ctx.t('settings.moveUp')}
+          disabled={props.first}
+          onClick={() => props.onMove(-1)}
+        />
+        <ctx.ui.IconButton
+          icon="arrow-down-to-line"
+          label={ctx.t('settings.moveDown')}
+          disabled={props.last}
+          onClick={() => props.onMove(1)}
+        />
+        <ctx.ui.IconButton
+          icon="trash"
+          label={ctx.t('settings.deleteColumn')}
+          onClick={props.onDelete}
+        />
+      </div>
+      <div class="sk-settings__column-start">
+        <ctx.ui.Switch
+          label={ctx.t('settings.startAgent')}
+          checked={props.column.startAgent}
+          onChange={(checked) => props.onChange({ startAgent: checked })}
+        />
+        <SavedTextInput
+          ctx={ctx}
+          class="sk-settings__grow"
+          label={ctx.t('settings.startPrompt')}
+          placeholder={DEFAULT_START_PROMPT}
+          value={props.column.startPrompt ?? ''}
+          allowEmpty
+          onSave={(value) => props.onChange({ startPrompt: value === '' ? null : value })}
+        />
+      </div>
     </div>
   );
 }
@@ -556,6 +646,8 @@ function SavedTextInput(props: {
   label: string;
   placeholder?: string;
   value: string;
+  /** Save an empty value instead of reverting, for a field that can be cleared. */
+  allowEmpty?: boolean;
   onSave(value: string): void;
 }) {
   const [draft, setDraft] = createSignal(props.value);
@@ -573,7 +665,7 @@ function SavedTextInput(props: {
   });
 
   function commit(): void {
-    const decision = commitText(draft(), saved);
+    const decision = commitText(draft(), saved, { allowEmpty: props.allowEmpty === true });
     if (decision.kind === 'save') {
       saved = decision.value;
       setDraft(decision.value);

@@ -58,6 +58,7 @@ function placementAt(position: number): Placement {
     ruleID: null,
     updatedAt: 0,
     lastRuleEventID: null,
+    task: null,
   };
 }
 
@@ -122,9 +123,23 @@ describe('movePlacement', () => {
       ruleID: null,
       updatedAt: 1763000000000,
       lastRuleEventID: null,
+      task: null,
     });
     expect(board.placements).toEqual({});
     expect(moved.revision).toBe(board.revision);
+  });
+
+  it('keeps a queued task when the card moves', () => {
+    const placed = boardWith({ columnId: 'backlog', source: 'auto', task: 'Fix the tests.' });
+
+    const moved = movePlacement(placed, {
+      sessionKey: 'sidecar\nses_1',
+      columnId: 'done',
+      position: 2,
+      updatedAt: 5,
+    });
+
+    expect(moved.placements['sidecar\nses_1']?.task).toBe('Fix the tests.');
   });
 
   it('keeps a pin and clears a rule when a person moves the card', () => {
@@ -207,6 +222,39 @@ describe('readBoard', () => {
 
     await commitBoard(store.storage, (current) => ({ ...current, defaultColumn: 'done' }));
     expect(JSON.stringify(store.value)).not.toContain('collapsed');
+  });
+
+  it('normalizes a document from before the two-way fields', async () => {
+    const modern = defaultBoard();
+    const legacy = {
+      ...modern,
+      columns: modern.columns.map(({ id, title, order, color }) => ({ id, title, order, color })),
+      placements: {
+        'sidecar\nses_1': {
+          columnId: 'done',
+          position: 0,
+          source: 'agent',
+          pinned: false,
+          ruleID: null,
+          updatedAt: 1,
+          lastRuleEventID: null,
+        },
+      },
+      settings: {
+        showSubagents: false,
+        archived: 'hide',
+        idleMinutes: 10,
+        notifyOnRuleMove: true,
+      },
+    };
+
+    const board = await readBoard(createStorage(legacy).storage);
+    expect(board.columns.find((column) => column.id === 'in-progress')?.startAgent).toBe(true);
+    expect(board.columns.find((column) => column.id === 'backlog')?.startAgent).toBe(false);
+    expect(board.columns.every((column) => column.startPrompt === null)).toBe(true);
+    expect(board.placements['sidecar\nses_1']?.task).toBeNull();
+    expect(board.placements['sidecar\nses_1']?.source).toBe('agent');
+    expect(board.settings.agentUpdatesCard).toBe(true);
   });
 
   it('refuses a malformed placement', () => {

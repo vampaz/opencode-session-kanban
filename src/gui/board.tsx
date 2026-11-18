@@ -179,6 +179,7 @@ export function Board(props: {
         key,
         columnId,
         pinned: placement?.pinned ?? false,
+        task: placement?.task ?? null,
         title: row?.title?.trim() || ctx.t('card.untitled'),
         directory: row?.location.directory ?? '',
         subpath: row?.subpath,
@@ -217,6 +218,8 @@ export function Board(props: {
         title: ctx.t('board.archivedColumn'),
         order: Number.MAX_SAFE_INTEGER,
         color: null,
+        startAgent: false,
+        startPrompt: null,
       };
       views.push({
         column,
@@ -263,8 +266,15 @@ export function Board(props: {
     setOverColumn(undefined);
 
     try {
-      await kanbanClient(ctx).move({ sessionKey, columnId, index });
+      const result = (await kanbanClient(ctx).move({ sessionKey, columnId, index })) as {
+        started: boolean;
+      };
       await refresh();
+
+      if (result.started) {
+        const title = cards().find((card) => card.key === sessionKey)?.title ?? sessionKey;
+        ctx.toast.show({ title: ctx.t('board.started', { title }) });
+      }
     } catch (cause) {
       setBoard(previous);
       fail('move.failed', cause);
@@ -361,10 +371,12 @@ export function Board(props: {
       current.data.session.remember(info);
 
       const forkKey = `${current.id}\n${info.id}`;
+      // A fork is placed by the board, not dragged by the user, so it must not start the agent.
       await kanbanClient(ctx).move({
         sessionKey: forkKey,
         columnId: card.columnId,
         index: indexAfter(card.columnId, card.key, forkKey),
+        source: 'auto',
       });
 
       ctx.tabs.open({ server: current.id, id: info.id }, { focus: true });
@@ -396,7 +408,6 @@ export function Board(props: {
     openNewSession(ctx, {
       columnId: column.id,
       directory: props.directory?.() ?? routedSession(ctx)?.directory,
-      index: () => indexFor(column.id),
     });
   }
 

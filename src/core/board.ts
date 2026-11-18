@@ -13,11 +13,18 @@ const MAX_WRITE_ATTEMPTS = 5;
 
 /** The settled default set. Written to a fresh document and editable afterwards. */
 export const DEFAULT_COLUMNS: readonly Column[] = [
-  { id: 'backlog', title: 'Backlog', order: 0, color: null },
-  { id: 'in-progress', title: 'In progress', order: 1, color: null },
-  { id: 'waiting', title: 'Waiting', order: 2, color: null },
-  { id: 'done', title: 'Done', order: 3, color: null },
-  { id: 'failed', title: 'Failed', order: 4, color: null },
+  { id: 'backlog', title: 'Backlog', order: 0, color: null, startAgent: false, startPrompt: null },
+  {
+    id: 'in-progress',
+    title: 'In progress',
+    order: 1,
+    color: null,
+    startAgent: true,
+    startPrompt: null,
+  },
+  { id: 'waiting', title: 'Waiting', order: 2, color: null, startAgent: false, startPrompt: null },
+  { id: 'done', title: 'Done', order: 3, color: null, startAgent: false, startPrompt: null },
+  { id: 'failed', title: 'Failed', order: 4, color: null, startAgent: false, startPrompt: null },
 ];
 
 export type Column = {
@@ -25,9 +32,17 @@ export type Column = {
   readonly title: string;
   readonly order: number;
   readonly color: string | null;
+  /** A user move into this column sends the agent a message. */
+  readonly startAgent: boolean;
+  /** The message sent when the session has already run; null uses the built-in default. */
+  readonly startPrompt: string | null;
 };
 
-export type PlacementSource = 'manual' | 'rule' | 'auto';
+/**
+ * `manual` is a user move, `agent` is the agent reporting its own state, `rule` and `auto` are the
+ * board's own placements. Rules skip only `manual` and pinned cards.
+ */
+export type PlacementSource = 'manual' | 'rule' | 'auto' | 'agent';
 
 export type Placement = {
   readonly columnId: string;
@@ -37,6 +52,8 @@ export type Placement = {
   readonly ruleID: string | null;
   readonly updatedAt: number;
   readonly lastRuleEventID: string | null;
+  /** A task the user queued on the card, sent when the card moves to a starting column. */
+  readonly task: string | null;
 };
 
 export type BoardSettings = {
@@ -44,6 +61,8 @@ export type BoardSettings = {
   readonly archived: 'hide' | 'column';
   readonly idleMinutes: number;
   readonly notifyOnRuleMove: boolean;
+  /** Add a short board instruction to every model request of a card session. */
+  readonly agentUpdatesCard: boolean;
 };
 
 const DEFAULT_SETTINGS: BoardSettings = {
@@ -51,6 +70,7 @@ const DEFAULT_SETTINGS: BoardSettings = {
   archived: 'hide',
   idleMinutes: 10,
   notifyOnRuleMove: true,
+  agentUpdatesCard: true,
 };
 
 /**
@@ -104,6 +124,7 @@ export function movePlacement(board: BoardDocument, input: MoveInput): BoardDocu
         ruleID: null,
         updatedAt: input.updatedAt,
         lastRuleEventID: null,
+        task: previous?.task ?? null,
       },
     },
   };
@@ -249,6 +270,7 @@ export function pinPlacement(
         ruleID: null,
         updatedAt,
         lastRuleEventID: null,
+        task: null,
       },
     },
   };
@@ -471,23 +493,33 @@ export function parseBoard(value: unknown): BoardDocument {
   if (!Array.isArray(value.rules)) throw new Error('The stored board has invalid rules.');
   if (!isSettings(value.settings)) throw new Error('The stored board has invalid settings.');
 
-  // Legacy columns carried an unused `collapsed` field: accept it, then drop it on read so the
-  // next write stores the current shape. Other unknown fields are dropped the same way.
+  // Older documents omit the start fields, the placement task, and the agent setting. Normalize
+  // them on read (and drop the legacy `collapsed` field) so the next write stores the current
+  // shape. Other unknown fields are dropped the same way.
   const columns = (value.columns as readonly Column[]).map((column) => ({
     id: column.id,
     title: column.title,
     order: column.order,
     color: column.color,
+    startAgent: column.startAgent ?? column.id === 'in-progress',
+    startPrompt: column.startPrompt ?? null,
   }));
+  const placements = Object.fromEntries(
+    Object.entries(value.placements as Readonly<Record<string, Placement>>).map(([key, item]) => [
+      key,
+      { ...item, task: item.task ?? null },
+    ]),
+  );
+  const settings = value.settings as BoardSettings;
 
   return {
     version: value.version,
     revision: value.revision,
     columns,
     defaultColumn: value.defaultColumn,
-    placements: value.placements,
+    placements,
     rules: value.rules,
-    settings: value.settings,
+    settings: { ...settings, agentUpdatesCard: settings.agentUpdatesCard ?? true },
   } as unknown as BoardDocument;
 }
 
@@ -501,7 +533,11 @@ function isColumn(value: unknown): value is Column {
     typeof value.id === 'string' &&
     typeof value.title === 'string' &&
     typeof value.order === 'number' &&
-    (typeof value.color === 'string' || value.color === null)
+    (typeof value.color === 'string' || value.color === null) &&
+    (value.startAgent === undefined || typeof value.startAgent === 'boolean') &&
+    (value.startPrompt === undefined ||
+      value.startPrompt === null ||
+      typeof value.startPrompt === 'string')
   );
 }
 
@@ -510,11 +546,15 @@ function isPlacement(value: unknown): value is Placement {
     isRecord(value) &&
     typeof value.columnId === 'string' &&
     typeof value.position === 'number' &&
-    (value.source === 'manual' || value.source === 'rule' || value.source === 'auto') &&
+    (value.source === 'manual' ||
+      value.source === 'rule' ||
+      value.source === 'auto' ||
+      value.source === 'agent') &&
     typeof value.pinned === 'boolean' &&
     (typeof value.ruleID === 'string' || value.ruleID === null) &&
     typeof value.updatedAt === 'number' &&
-    (typeof value.lastRuleEventID === 'string' || value.lastRuleEventID === null)
+    (typeof value.lastRuleEventID === 'string' || value.lastRuleEventID === null) &&
+    (value.task === undefined || value.task === null || typeof value.task === 'string')
   );
 }
 
@@ -524,6 +564,7 @@ function isSettings(value: unknown): value is BoardSettings {
     typeof value.showSubagents === 'boolean' &&
     (value.archived === 'hide' || value.archived === 'column') &&
     typeof value.idleMinutes === 'number' &&
-    typeof value.notifyOnRuleMove === 'boolean'
+    typeof value.notifyOnRuleMove === 'boolean' &&
+    (value.agentUpdatesCard === undefined || typeof value.agentUpdatesCard === 'boolean')
   );
 }

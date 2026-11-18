@@ -39,7 +39,9 @@ server's own data.
    `plugin:<plugin id>:<key>` in one shared `kv` table with no location component.
 4. **No polling.** Session state comes from the event stream plus the window's synced client data.
    A single 30 s tick exists only for idle-duration rules.
-5. **Columns are user buckets; status is a badge.** Rules are the only automatic mover of cards.
+5. **Columns are user buckets, and the board is two-way.** Cards still show a status badge, but the
+   agent now reports its own state with `kanban_move` (`sessionID: "me"`), and a user move into a
+   starting column sends the session a message. Rules remain the only mover triggered by events.
 6. **Placements are sparse.** An unplaced session renders in the default column virtually. Installing
    the plugin writes nothing per session.
 7. **Tools and RPC are different things.** Tools are the agent surface; RPC is the transport between
@@ -52,6 +54,24 @@ server's own data.
 10. **A fork follows its root.** A fork inherits the source card's column when created, and its
     visibility follows the root session: an archived root hides the fork, and a deleted root removes
     it. Walk the `parentID` chain to the root; never treat the immediate parent as the authority.
+11. **The agent can report its own state.** A session hook adds a short instruction to each model
+    request of a card session, naming the card's column and the column mapping, and telling the agent
+    to call `kanban_move` with `sessionID: "me"` only when its state changes. The instruction is
+    marked in the request's system parts so every plugin instance in the process adds it once. It is
+    on by default; `agentUpdatesCard` turns it off. Agent moves get `source: "agent"`, so rules treat
+    them like `auto` and only `manual` or pinned cards stay protected.
+12. **A user move can start the agent.** Moving a card into a `startAgent` column from a different
+    column sends one message: the queued task if there is one, else the column's `startPrompt`, else
+    the built-in "Continue with this task." for a session that has run. Agent, rule, and tool moves
+    never trigger it, and a running or waiting session is skipped. The decision runs inside the
+    board write, so a double drop cannot prompt twice; the message is sent after the placement is
+    stored.
+13. **Backlog is a task queue.** A task given to a New session in a non-starting column is stored on
+    the placement and sent when the card reaches a starting column. It is a launch queue tied to a
+    session, not a separate task tracker.
+14. **One-time sort, never automatic.** Existing unplaced cards can be placed by state once, with a
+    preview and a confirmation. The sort writes `source: "auto"` and never touches placed or pinned
+    cards.
 
 ## Goals
 
@@ -67,7 +87,8 @@ server's own data.
 - Task management independent of sessions.
 - Cross-machine or cloud sync.
 - Editing a session's content in the board.
-- Status-driven columns that move cards without a rule.
+- A background watcher that moves cards from status alone. A card moves when the agent reports, a
+  rule fires, or the user asks.
 - Rule-driven archiving.
 - A full-window board page. This needs a new GUI surface from OpenCode; do not emulate it with
   `window.bottom`.
@@ -127,7 +148,7 @@ Methods:
 | Method | Input | Output |
 | --- | --- | --- |
 | `snapshot` | — | `{ version, revision, columns, placements[], rules[], settings }` |
-| `move` | `{ sessionKey, columnId, index, source? }` | `{ revision }` |
+| `move` | `{ sessionKey, columnId, index, source? }` | `{ revision, started }` |
 | `setPinned` | `{ sessionKey, pinned }` | `{ revision }` |
 | `clearManual` | `{ sessionKey }` | `{ revision }` |
 | `prune` | `{ keys }` | `{ revision }` |
@@ -136,8 +157,9 @@ Methods:
 | `rules.upsert` / `rules.remove` / `rules.reorder` | rule patch | `{ revision }` |
 | `rules.preview` | — | `{ moves: { sessionKey, from, to, ruleID }[] }` |
 | `settings.update` | partial settings | `{ revision }` |
-| `createSession` | `{ directory, title?, prompt?, columnId }` | `{ sessionKey }` |
-| `forkSession` | `{ sessionKey, columnId? }` | `{ sessionKey }` |
+| `session.create` | `{ directory, columnId, title?, task? }` | `{ sessionID, revision, started, queued }` |
+| `sort.preview` | — | `{ moves, counts }` |
+| `sort.apply` | — | `{ revision, placed }` |
 | `board.replace` | `{ document }` | `{ revision }` |
 
 Events: `changed` `{ revision }`, `notify` `{ id, title, message, variant, sessionKey }`.
@@ -146,9 +168,9 @@ Events: `changed` `{ revision }`, `notify` `{ id, title, message, variant, sessi
 the fractional position, and rebalances only when the gap collapses. `prune` takes the session keys a
 window knows are gone, because the server cannot enumerate sessions.
 
-`createSession` and `forkSession` are listed for the agent tools in M4. In M2 the window creates and
-forks through the client and places the result with `move`, because the window owns the synced
-session store that `remember` feeds.
+The window creates sessions through `session.create` so the start-or-queue rule lives on the server;
+it still forks through the client and places the fork with `move` (`source: "auto"`), because the
+window owns the synced session store that `remember` feeds.
 
 Every method returns the new `revision`. Writes are serialized by one in-process lock shared through
 `globalThis`, so two locations cannot lose an update; a revision read-back stays as a second check. Duplicate writes are therefore harmless when
@@ -172,18 +194,26 @@ Stored under one key (`board`) as a single JSON document.
   "version": 1,
   "revision": 42,
   "columns": [
-    { "id": "backlog", "title": "Backlog", "order": 0, "color": null }
+    {
+      "id": "backlog",
+      "title": "Backlog",
+      "order": 0,
+      "color": null,
+      "startAgent": false,
+      "startPrompt": null        // null uses "Continue with this task."
+    }
   ],
   "defaultColumn": "backlog",
   "placements": {
     "sidecar\nses_abc": {
       "columnId": "review",
       "position": 1536.5,
-      "source": "manual",          // manual | rule | auto
+      "source": "manual",          // manual | rule | auto | agent
       "pinned": false,
       "ruleID": null,
       "updatedAt": 1763000000000,
-      "lastRuleEventID": null
+      "lastRuleEventID": null,
+      "task": null                 // a queued task, sent on a starting column
     }
   },
   "rules": [
@@ -204,10 +234,15 @@ Stored under one key (`board`) as a single JSON document.
     "showSubagents": false,
     "archived": "hide",            // hide | column
     "idleMinutes": 10,
-    "notifyOnRuleMove": true
+    "notifyOnRuleMove": true,
+    "agentUpdatesCard": true
   }
 }
 ```
+
+Older documents omit `startAgent`, `startPrompt`, `task`, and `agentUpdatesCard`. `parseBoard`
+normalizes them on read: `startAgent` defaults to `id === "in-progress"`, the others to `null` and
+`true`, so a board written before this feature still loads and the next write stores the new shape.
 
 Notes:
 
@@ -257,8 +292,8 @@ The fork keeps its own column until its root disappears; it never becomes a root
 
 ### Board
 
-- Columns: add, rename, recolor, reorder, delete. Deleting a column moves its cards to
-  `defaultColumn`.
+- Columns: add, rename, recolor, reorder, delete, and set **Start the agent** plus a **Start
+  message**. Deleting a column moves its cards to `defaultColumn`.
 - Cards show title, project and subpath, status badge, last activity, agent and model, and cost for
   the current run. No task checklist in v1.
 - A running card shows a quiet activity indicator; respect `prefers-reduced-motion`.
@@ -270,13 +305,20 @@ The fork keeps its own column until its root disappears; it never becomes a root
   source card's column. Their visibility follows the root session.
 - Opening a card uses `ctx.tabs.open({ server, id }, { focus: true })`. The board closes on narrow
   screens after opening.
+- **Two-way moves.** The agent moves its own card when its state changes (`source: "agent"`), and a
+  user move into a starting column starts the session (see Starting sessions). Moving a card and
+  setting its column from settings are the only ways a column starts work.
+- A card whose placement holds a queued task shows a small **Task queued** marker with the task in
+  its tooltip.
+- **Sort sessions by state** in settings: a preview with counts per column, then one confirmed write
+  that places unplaced cards by state.
 
 ### Starting sessions
 
 - **New session** on a column opens a small dialog: project (defaults to the panel's session
-  project), optional title, optional starter prompt. It creates the session through
-  `data.session.create({ location: { directory: project.canonical } })`, writes the placement, and
-  opens the tab. On Home the dialog requires an explicit project.
+  project), optional title, optional **Task**. It creates the session through `session.create`,
+  writes the placement, and opens the tab. In a starting column the task runs at once; otherwise it
+  waits on the placement. On Home the dialog requires an explicit project.
 - **Start from card** creates a new session in the source session's project with an optional prompt.
 - **Fork from card** calls `ctx.client.session.fork({ sessionID })` with no `before`, so the full
   history is copied, then `data.session.remember(info)`, places the fork in the source card's column,
@@ -323,7 +365,7 @@ Semantics:
 - An action applies at most once per `(ruleID, sessionKey, eventID)`, recorded in
   `lastRuleEventID`. This makes concurrent evaluation across plugin instances harmless.
 - A placement with `source: "manual"` or `pinned: true` is skipped unless the rule sets
-  `overrideManual`.
+  `overrideManual`. An agent's own placement (`source: "agent"`) is movable, like `auto`.
 - Board-originated moves never re-enter the engine.
 - Archived and deleted sessions are never moved, and neither is a fork whose root is archived.
 - `cooldownMs` bounds repeat firings per session (for example a flapping retry loop).
@@ -332,8 +374,9 @@ Semantics:
   window is unfocused, a system notification through `ctx.attention.notify({ title, session, id })`
   (`title` is required; `id` dedupes across windows).
 
-Deferred: `prompt` as a rule action. It costs tokens and can loop; it needs a cooldown, a per-session
-cap, and the `kanban.prompt` permission.
+Starting an agent is a user action, not a rule action. A rule-driven prompt would cost tokens on
+every event and could loop; a user move is bounded because it needs a person, and the session is
+skipped while it is already running or waiting. Rule actions stay `move`, `pin`, and `notify`.
 
 ### Tools
 
@@ -349,7 +392,7 @@ Registered by the server part, namespace `kanban`, `codemode: true`. Effective n
 | `kanban_clear_manual` | `{ sessionID }` | none |
 | `kanban_archive` | `{ sessionID, archived }` | `kanban.archive` |
 | `kanban_fork` | `{ sessionID, column? }` | `kanban.fork` |
-| `kanban_create_session` | `{ directory, title?, prompt?, column }` | `kanban.prompt` when `prompt` is set |
+| `kanban_create_session` | `{ directory, title?, prompt?, column }` | `kanban.prompt` when the task runs immediately |
 | `kanban_list_rules` | — | none |
 | `kanban_set_rule` | rule patch, or `{ id, remove: true }` | `kanban.rules` |
 | `kanban_preview_rules` | — | none |

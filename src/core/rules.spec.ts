@@ -59,6 +59,7 @@ function placement(overrides: Partial<Placement> = {}): Placement {
     ruleID: null,
     updatedAt: 0,
     lastRuleEventID: null,
+    task: null,
     ...overrides,
   };
 }
@@ -167,6 +168,19 @@ describe('applyRule', () => {
       event,
     );
     expect(outcome?.to).toBe('done');
+  });
+
+  it('moves a card the agent placed itself', () => {
+    const agent = { 'sidecar\nses_1': placement({ source: 'agent' }) };
+
+    expect(applyRule(boardWith([rule()], agent), subject(), event)?.to).toBe('done');
+    expect(
+      applyRule(
+        boardWith([rule()], { 'sidecar\nses_1': placement({ source: 'agent', pinned: true }) }),
+        subject(),
+        event,
+      ),
+    ).toBeUndefined();
   });
 
   it('skips a pinned card unless the rule overrides it', () => {

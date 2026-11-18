@@ -26,6 +26,13 @@ function bool(value: unknown, name: string): boolean {
   return value;
 }
 
+/** An optional text field: absent, null, and blank all read as null. */
+function nullableText(value: unknown, name: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new Error(`Invalid ${name}.`);
+  return value.trim() || null;
+}
+
 function finite(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Invalid ${name}.`);
   return value;
@@ -115,12 +122,16 @@ export function parseRule(value: unknown): Rule {
 
 export function parseColumn(value: unknown): Column {
   const item = record(value, 'column');
+  const id = text(item.id, 'column id');
 
   return {
-    id: text(item.id, 'column id'),
+    id,
     title: text(item.title, 'column title'),
     order: finite(item.order, 'column order'),
     color: item.color === null ? null : text(item.color, 'column color'),
+    startAgent:
+      item.startAgent === undefined ? id === 'in-progress' : bool(item.startAgent, 'start agent'),
+    startPrompt: nullableText(item.startPrompt, 'start prompt'),
   };
 }
 
@@ -147,6 +158,9 @@ export function parseSettings(value: unknown): Partial<BoardSettings> {
   }
   if (item.notifyOnRuleMove !== undefined) {
     patch.notifyOnRuleMove = bool(item.notifyOnRuleMove, 'notifyOnRuleMove');
+  }
+  if (item.agentUpdatesCard !== undefined) {
+    patch.agentUpdatesCard = bool(item.agentUpdatesCard, 'agentUpdatesCard');
   }
 
   return patch as Partial<BoardSettings>;

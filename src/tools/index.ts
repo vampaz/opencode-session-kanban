@@ -1,5 +1,6 @@
 import type { Plugin } from '@opencode/plugin';
 
+import { startsAgent } from '../core/start';
 import { BoardError, type Operations } from '../operations';
 import { parseRule } from '../validate';
 import { formatCardDetail, formatCardList, formatPreview, formatRules } from './format';
@@ -95,7 +96,7 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
     {
       name: 'move',
       description:
-        'Move a session card to a column. `column` takes a column id or title. The move counts as a manual placement, so rules skip the card until it is cleared or a rule overrides manual placements.',
+        'Move a session card to a column. `column` takes a column id or title. The move counts as an agent placement: rules may still move the card, and it never starts the agent. Use `sessionID: "me"` to report your own state.',
       input: {
         type: 'object',
         properties: {
@@ -116,7 +117,7 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
         if (!column.ok) return { content: column.message };
 
         return guarded(async () => {
-          const result = await ops.moveToColumn(session.value, column.value);
+          const result = await ops.moveToColumn(session.value, column.value, 'agent');
           return `Moved ${session.value} to ${result.column.title} (${result.column.id}).`;
         });
       },
@@ -245,7 +246,7 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
     {
       name: 'create_session',
       description:
-        'Create a session in a project directory and place its card in a column. A starter prompt runs the agent and needs the kanban.prompt permission.',
+        'Create a session in a project directory and place its card in a column. A task starts the agent in a column that starts agents (needs the kanban.prompt permission); otherwise it is queued on the card until the card moves to such a column.',
       input: {
         type: 'object',
         properties: {
@@ -257,7 +258,8 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
           title: { type: 'string', description: 'Optional session title.' },
           prompt: {
             type: 'string',
-            description: 'Optional starter prompt. It runs the agent and costs tokens.',
+            description:
+              'Optional task. It starts the agent and costs tokens in a starting column, or waits queued on the card.',
           },
         },
         required: ['directory', 'column'],
@@ -269,12 +271,17 @@ export function createKanbanTools(ctx: Plugin.Context, ops: Operations): ToolInf
         if (!parsed.ok) return { content: parsed.message };
 
         return guarded(async () => {
-          if (parsed.value.prompt) {
+          const column = await ops.columnValue(parsed.value.column);
+          if (parsed.value.prompt && startsAgent(column)) {
             await requirePermission(ctx, context, 'kanban.prompt', [parsed.value.directory]);
           }
 
           const result = await ops.createInColumn(parsed.value);
-          const suffix = parsed.value.prompt ? ' The starter prompt is running.' : '';
+          const suffix = result.started
+            ? ' The task is running.'
+            : result.queued
+              ? ' The task waits on the card until a starting column.'
+              : '';
           return `Created ${result.session.id} in ${result.column.title} (${result.column.id}).${suffix}`;
         });
       },

@@ -206,6 +206,20 @@ export const boardStyles = `
   overflow-wrap: anywhere;
 }
 
+.sk-card__task {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-weak, inherit);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sk-card__task::before {
+  content: '▸ ';
+}
+
 .sk-status {
   display: inline-flex;
   flex: 0 0 auto;
@@ -273,7 +287,27 @@ export const boardStyles = `
   padding: 24px;
 }
 
-.sk-settings__column,
+.sk-settings__column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-base, currentColor);
+}
+
+.sk-settings__column-main,
+.sk-settings__column-start {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.sk-settings__column-start {
+  padding-inline-start: 34px;
+}
+
 .sk-settings__rule {
   display: flex;
   gap: 8px;

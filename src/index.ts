@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { Plugin } from '@opencode/plugin';
 
+import { appendInstruction, boardInstruction, hasInstruction } from './core/instruction';
+import { rulesApplyTo } from './core/status';
 import { startEngine, type NotifyPayload } from './engine';
 import { createOperations } from './operations';
 import { Kanban } from './rpc';
@@ -44,13 +46,43 @@ export default Plugin.define({
 
       move: async (input) => {
         const request = parseMove(input);
-        const { board } = await ops.moveByIndex(
+        const { board, started } = await ops.moveByIndex(
           request.sessionKey,
           request.columnId,
           request.index,
           request.source,
         );
-        return { revision: board.revision };
+        return { revision: board.revision, started };
+      },
+
+      /** The board's own create path, so the start-or-queue rule lives in one place. */
+      'session.create': async (input) => {
+        const value = record(input, 'create');
+        const directory = stringField(value, 'directory', 'The session needs a directory.');
+        const column = stringField(value, 'columnId', 'The session needs a column.');
+        const title = optionalString(value.title);
+        const task = optionalString(value.task);
+
+        const result = await ops.createInColumn({
+          directory,
+          column,
+          ...(title ? { title } : {}),
+          ...(task ? { prompt: task } : {}),
+        });
+
+        return {
+          sessionID: result.session.id,
+          revision: result.board.revision,
+          started: result.started,
+          queued: result.queued,
+        };
+      },
+
+      'sort.preview': async () => ops.sortPreview(),
+
+      'sort.apply': async () => {
+        const { board, placed } = await ops.sortApply();
+        return { revision: board.revision, placed };
       },
 
       setPinned: async (input) => {
@@ -136,7 +168,31 @@ export default Plugin.define({
       notify: (payload: NotifyPayload) => rpc.events.emit('notify', payload),
     });
 
-    return () => stopEngine();
+    // Every location instance registers this hook, and every instance edits the same request, so
+    // `appendInstruction` is what keeps the text to one part per request.
+    const instructionHook = await ctx.session.hook('context', async (event) => {
+      if (hasInstruction(event.system)) return;
+
+      const board = await ops.board();
+      if (!board.settings.agentUpdatesCard) return;
+
+      const info = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined);
+      if (!info) return;
+      if (!rulesApplyTo(info, { showSubagents: board.settings.showSubagents })) return;
+
+      const placement = board.placements[ops.sessionKey(info.id)];
+      const columnId =
+        placement && board.columns.some((column) => column.id === placement.columnId)
+          ? placement.columnId
+          : board.defaultColumn;
+
+      appendInstruction(event.system, boardInstruction(board, columnId));
+    });
+
+    return async () => {
+      stopEngine();
+      await instructionHook.dispose();
+    };
   },
 });
 
@@ -198,4 +254,8 @@ function stringField(value: Record<string, unknown>, key: string, message: strin
   const fieldValue = value[key];
   if (typeof fieldValue !== 'string') throw new Error(message);
   return fieldValue;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
 }

@@ -9,8 +9,10 @@ const columnSchema = {
     title: { type: 'string' },
     order: { type: 'number' },
     color: { type: ['string', 'null'] },
+    startAgent: { type: 'boolean' },
+    startPrompt: { type: ['string', 'null'] },
   },
-  required: ['id', 'title', 'order', 'color'],
+  required: ['id', 'title', 'order', 'color', 'startAgent', 'startPrompt'],
   additionalProperties: false,
 } as const;
 
@@ -19,13 +21,23 @@ const placementSchema = {
   properties: {
     columnId: { type: 'string' },
     position: { type: 'number' },
-    source: { type: 'string', enum: ['manual', 'rule', 'auto'] },
+    source: { type: 'string', enum: ['manual', 'rule', 'auto', 'agent'] },
     pinned: { type: 'boolean' },
     ruleID: { type: ['string', 'null'] },
     updatedAt: { type: 'number' },
     lastRuleEventID: { type: ['string', 'null'] },
+    task: { type: ['string', 'null'] },
   },
-  required: ['columnId', 'position', 'source', 'pinned', 'ruleID', 'updatedAt', 'lastRuleEventID'],
+  required: [
+    'columnId',
+    'position',
+    'source',
+    'pinned',
+    'ruleID',
+    'updatedAt',
+    'lastRuleEventID',
+    'task',
+  ],
   additionalProperties: false,
 } as const;
 
@@ -65,8 +77,9 @@ const settingsSchema = {
     archived: { type: 'string', enum: ['hide', 'column'] },
     idleMinutes: { type: 'number' },
     notifyOnRuleMove: { type: 'boolean' },
+    agentUpdatesCard: { type: 'boolean' },
   },
-  required: ['showSubagents', 'archived', 'idleMinutes', 'notifyOnRuleMove'],
+  required: ['showSubagents', 'archived', 'idleMinutes', 'notifyOnRuleMove', 'agentUpdatesCard'],
   additionalProperties: false,
 } as const;
 
@@ -209,12 +222,79 @@ const revisionSchema = {
   additionalProperties: false,
 } as const;
 
+const moveOutputSchema = {
+  type: 'object',
+  properties: { revision: { type: 'number' }, started: { type: 'boolean' } },
+  required: ['revision', 'started'],
+  additionalProperties: false,
+} as const;
+
+const createInput = {
+  type: 'object',
+  properties: {
+    directory: { type: 'string' },
+    columnId: { type: 'string' },
+    title: { type: 'string' },
+    task: { type: 'string' },
+  },
+  required: ['directory', 'columnId'],
+  additionalProperties: false,
+} as const;
+
+const createOutputSchema = {
+  type: 'object',
+  properties: {
+    sessionID: { type: 'string' },
+    revision: { type: 'number' },
+    started: { type: 'boolean' },
+    queued: { type: 'boolean' },
+  },
+  required: ['sessionID', 'revision', 'started', 'queued'],
+  additionalProperties: false,
+} as const;
+
+const sortPreviewSchema = {
+  type: 'object',
+  properties: {
+    moves: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { sessionKey: { type: 'string' }, columnId: { type: 'string' } },
+        required: ['sessionKey', 'columnId'],
+        additionalProperties: false,
+      },
+    },
+    counts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { columnId: { type: 'string' }, count: { type: 'number' } },
+        required: ['columnId', 'count'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['moves', 'counts'],
+  additionalProperties: false,
+} as const;
+
+const sortApplySchema = {
+  type: 'object',
+  properties: { revision: { type: 'number' }, placed: { type: 'number' } },
+  required: ['revision', 'placed'],
+  additionalProperties: false,
+} as const;
+
 /** The contract between the server part and the desktop GUI. */
 export const Kanban = Rpc.define({
   id: 'kanban',
   methods: {
     snapshot: { input: emptyInput, output: snapshotSchema },
-    move: { input: moveInput, output: revisionSchema },
+    move: { input: moveInput, output: moveOutputSchema },
+    'session.create': { input: createInput, output: createOutputSchema },
+    'sort.preview': { input: emptyInput, output: sortPreviewSchema },
+    'sort.apply': { input: emptyInput, output: sortApplySchema },
     setPinned: { input: setPinnedInput, output: revisionSchema },
     clearManual: { input: sessionKeyInput, output: revisionSchema },
     prune: { input: pruneInput, output: revisionSchema },

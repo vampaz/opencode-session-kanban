@@ -16,6 +16,7 @@ export type CardView = CardState & {
   readonly cost: number;
   readonly columnId: string;
   readonly pinned: boolean;
+  readonly task: string | null;
 };
 
 export type CardActions = {
@@ -135,6 +136,14 @@ export function SessionCard(props: {
           <span>{formatCost(props.card.cost, ctx.locale.locale())}</span>
         </Show>
       </div>
+
+      <Show when={props.card.task}>
+        {(task) => (
+          <span class="sk-card__task" title={task()}>
+            {ctx.t('card.taskQueued')}
+          </span>
+        )}
+      </Show>
     </article>
   );
 }

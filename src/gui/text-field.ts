@@ -6,11 +6,19 @@ export type TextCommit =
 
 /**
  * Decides what a text field does when the user finishes editing: save a changed, non-empty value,
- * revert an empty one, and leave an unchanged one alone.
+ * revert an empty one, and leave an unchanged one alone. `allowEmpty` saves an empty value, which a
+ * field that can be cleared (an optional message) needs.
  */
-export function commitText(draft: string, stored: string): TextCommit {
+export function commitText(
+  draft: string,
+  stored: string,
+  options: { readonly allowEmpty?: boolean } = {},
+): TextCommit {
   const value = draft.trim();
-  if (!value) return { kind: 'revert' };
+  if (!value) {
+    if (!options.allowEmpty) return { kind: 'revert' };
+    return stored === '' ? { kind: 'none' } : { kind: 'save', value: '' };
+  }
   if (value === stored) return { kind: 'none' };
   return { kind: 'save', value };
 }

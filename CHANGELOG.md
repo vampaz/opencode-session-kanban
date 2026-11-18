@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added
+
+- The board works in both directions. A session hook adds a short board instruction to the model
+  requests of root and fork sessions, so the agent can move its own card with `kanban_move`
+  (`source: agent`). The instruction is deduplicated per request across plugin instances and can be
+  turned off with the **Agents update their card** setting.
+- Columns get **Start the agent** and **Start message**. Moving a card into a starting column (In
+  progress by default) sends the queued task, the column's message, or a built-in "Continue with this
+  task.", and shows a start toast. Rule, agent, and tool moves never start anything.
+- A task given to a New session in a non-starting column is stored on the placement (`task`), shows
+  a **Task queued** marker, and is sent when the card reaches a starting column.
+- **Sort sessions by state** in settings: a preview with counts per column, then one confirmed write
+  that places unplaced cards by state (`sort.preview`, `sort.apply`).
+- `session.create` RPC so the window and `kanban_create_session` share the start-or-queue rule.
+- `move` now reports whether it started the agent, and the settings page exposes the new column and
+  agent fields.
+
+### Changed
+
+- `kanban_move` records an `agent` placement, which rules may still move; only `manual` and pinned
+  cards are protected. A move can no longer act as a manual override.
+- The New session dialog's **Starter prompt** is now **Task**.
+- A board written before these fields loads unchanged: `parseBoard` defaults `startAgent` by column
+  id, and adds `startPrompt`, `task`, and `agentUpdatesCard` on read.
+
 ### Removed
 
 - The unused column-collapse switch and its `settings.collapsed` string. Columns no longer carry

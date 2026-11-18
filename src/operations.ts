@@ -26,6 +26,8 @@ import {
 import { performArchive } from './core/archive';
 import { filterCardRows, type CardRow } from './core/cards';
 import { previewRules, type PreviewMove, type Rule } from './core/rules';
+import { planSort, type SortPlan } from './core/sort';
+import { decideCreate, decideStart, startsAgent, type StartDecision } from './core/start';
 import { selectCards, type CardStatus, type SessionFacts } from './core/status';
 import { subjectFor } from './engine';
 
@@ -67,6 +69,67 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
     const board = await commitBoard(ctx.storage, mutate);
     await changed(board.revision);
     return board;
+  }
+
+  function sessionIDOfKey(key: string): string {
+    const index = key.indexOf('\n');
+    return index === -1 ? key : key.slice(index + 1);
+  }
+
+  async function sendStart(sessionID: string, decision: StartDecision): Promise<boolean> {
+    if (decision.kind === 'none') return false;
+
+    try {
+      await ctx.session.prompt({ sessionID, text: decision.text });
+      // The task is cleared only after it was sent, so a failed prompt keeps it queued.
+      if (decision.kind === 'task') {
+        await commit((document) => setTask(document, sessionKey(sessionID), null));
+      }
+      return true;
+    } catch (cause) {
+      console.error('[kanban] could not start the agent', cause);
+      return false;
+    }
+  }
+
+  /** The one-time sort's subjects: visible cards with their state and placement. */
+  async function sortSubjects(): Promise<{ board: BoardDocument; plan: SortPlan }> {
+    const board = await readBoard(ctx.storage);
+    const sessions = await listSessions();
+    const activity = sharedActivity().snapshot();
+    const states = selectCards(factsOf(sessions), {
+      running: activity.running,
+      waiting: activity.waiting,
+      showSubagents: board.settings.showSubagents,
+    });
+    const byID = new Map(sessions.map((session) => [session.id, session]));
+
+    return {
+      board,
+      plan: planSort(
+        board,
+        states.map((state) => {
+          const key = sessionKey(state.id);
+          return {
+            sessionKey: key,
+            status: state.status,
+            placed: board.placements[key] !== undefined,
+            pinned: board.placements[key]?.pinned ?? false,
+            ran: byID.get(state.id)?.time.idle !== undefined,
+          };
+        }),
+      ),
+    };
+  }
+
+  function setTask(board: BoardDocument, key: string, task: string | null): BoardDocument {
+    const placement = board.placements[key];
+    if (!placement || placement.task === task) return board;
+
+    return {
+      ...board,
+      placements: { ...board.placements, [key]: { ...placement, task } },
+    };
   }
 
   function sortColumns(board: BoardDocument): Column[] {
@@ -213,24 +276,49 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
       source: PlacementSource,
     ) => {
       const current = await readBoard(ctx.storage);
-      if (!current.columns.some((column) => column.id === columnId)) {
+      const target = current.columns.find((column) => column.id === columnId);
+      if (!target) {
         throw new BoardError(
           `Unknown column "${columnId}". Valid columns: ${describeColumns(current)}.`,
         );
       }
 
-      const board = await commit(
-        (document) =>
-          dropPlacement(document, {
-            sessionKey: sessionKeyValue,
-            columnId,
-            index,
-            source,
-            updatedAt: Date.now(),
-          }).board,
-      );
+      // Only a user move can start an agent, so read the session facts only for that case.
+      const sessionID = sessionIDOfKey(sessionKeyValue);
+      let ran = false;
+      if (source === 'manual' && startsAgent(target)) {
+        const info = await ctx.session.get({ sessionID }).catch(() => undefined);
+        ran = info?.time.idle !== undefined;
+      }
 
-      return { board };
+      let decision: StartDecision = { kind: 'none' };
+      const board = await commit((document) => {
+        const column = document.columns.find((candidate) => candidate.id === columnId) ?? target;
+        const before = document.placements[sessionKeyValue];
+        const activity = sharedActivity();
+        decision = decideStart({
+          source,
+          from: before?.columnId ?? document.defaultColumn,
+          column,
+          task: before?.task ?? null,
+          running: activity.isRunning(sessionID),
+          waiting: activity.isWaiting(sessionID),
+          ran,
+        });
+
+        return dropPlacement(document, {
+          sessionKey: sessionKeyValue,
+          columnId,
+          index,
+          source,
+          updatedAt: Date.now(),
+        }).board;
+      });
+
+      // A floating promise would lose the report; the move already succeeded, so a failure here
+      // is logged and reported as "not started" instead of reverting the card.
+      const started = decision.kind === 'none' ? false : await sendStart(sessionID, decision);
+      return { board, started };
     },
 
     moveToColumn: async (
@@ -313,28 +401,59 @@ export function createOperations(ctx: Plugin.Context, changed: Changed) {
     }) => {
       const current = await readBoard(ctx.storage);
       const column = resolveColumn(current, input.column);
+      const task = input.prompt?.trim() ?? '';
+      const decision = decideCreate(column, task);
 
       const session = await ctx.session.create({
         location: { directory: input.directory },
         ...(input.title?.trim() ? { title: input.title.trim() } : {}),
       });
 
-      const board = await commit(
-        (document) =>
-          dropPlacement(document, {
-            sessionKey: sessionKey(session.id),
-            columnId: column.id,
-            index: columnOrder(document, column.id).length,
-            source: 'auto',
-            updatedAt: Date.now(),
-          }).board,
-      );
+      const board = await commit((document) => {
+        const next = dropPlacement(document, {
+          sessionKey: sessionKey(session.id),
+          columnId: column.id,
+          index: columnOrder(document, column.id).length,
+          source: 'auto',
+          updatedAt: Date.now(),
+        }).board;
 
-      if (input.prompt?.trim()) {
-        await ctx.session.prompt({ sessionID: session.id, text: input.prompt.trim() });
+        // A task in a column that does not start the agent waits on the card.
+        return decision.queue ? setTask(next, sessionKey(session.id), task) : next;
+      });
+
+      if (decision.send) {
+        await ctx.session.prompt({ sessionID: session.id, text: task });
       }
 
-      return { board, column, session };
+      return { board, column, session, started: decision.send, queued: decision.queue };
+    },
+
+    /** The one-time sort's preview: unplaced cards by state, and the counts per column. */
+    sortPreview: async (): Promise<SortPlan> => (await sortSubjects()).plan,
+
+    /** Applies a plan in one write. A card placed since the preview is left alone. */
+    sortApply: async () => {
+      const { plan } = await sortSubjects();
+      if (plan.moves.length === 0) return { board: await readBoard(ctx.storage), placed: 0 };
+
+      let placed = 0;
+      const now = Date.now();
+      const board = await commit((document) =>
+        plan.moves.reduce((next, move) => {
+          if (next.placements[move.sessionKey]) return next;
+          placed += 1;
+          return dropPlacement(next, {
+            sessionKey: move.sessionKey,
+            columnId: move.columnId,
+            index: columnOrder(next, move.columnId).length,
+            source: 'auto',
+            updatedAt: now,
+          }).board;
+        }, document),
+      );
+
+      return { board, placed };
     },
 
     listCards: async (query: CardQuery): Promise<CardRow[]> => {
